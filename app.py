@@ -58,7 +58,7 @@ def get_docx_text_with_math(docx_file):
     return "\n".join(full_text)
 
 # ----------------------------------------------------
-# HÀM XỬ LÝ KÝ HIỆU TOÁN & VẬT LÝ & LỌC CHỮ "CÂU X"
+# HÀM XỬ LÝ KÝ HIỆU TOÁN & XÓA TIỀN TỐ DƯ
 # ----------------------------------------------------
 def format_math_text(text):
     if not isinstance(text, str):
@@ -70,11 +70,17 @@ def format_math_text(text):
     return text
 
 def clean_question_prefix(text):
-    """Xóa bỏ chữ 'Câu 1:', 'Câu 1.', 'Câu 6' ở đầu câu để tránh lặp khi trộn đề."""
+    """Xóa bỏ chữ 'Câu 1:', 'Câu 1.' ở đầu câu hỏi."""
     if not isinstance(text, str):
         return text
-    # Xóa các dạng "Câu 1:", "Câu 1.", "Câu 1 ", "Câu 10:"
     cleaned = re.sub(r'^\s*Câu\s*\d+[\.\:\s]*', '', text, flags=re.IGNORECASE)
+    return cleaned.strip()
+
+def clean_option_prefix(text):
+    """Xóa bỏ ký tự 'A.', 'B.', 'C.', 'D.' ở đầu đáp án."""
+    if not isinstance(text, str):
+        return text
+    cleaned = re.sub(r'^\s*[A-D][\.\:\)]\s*', '', text, flags=re.IGNORECASE)
     return cleaned.strip()
 
 # ----------------------------------------------------
@@ -143,13 +149,14 @@ def parse_questions_from_text(text):
                 q_lines = [l.strip() for l in q_text.split('\n') if l.strip()]
                 full_q = " ".join(q_lines)
                 
-                # Tự động loại bỏ tiền tố "Câu X" thừa khi vừa bóc tách
                 clean_q = clean_question_prefix(full_q)
+                # Tự động loại bỏ chữ A, B, C, D sẵn có trong phương án
+                clean_opts = [clean_option_prefix(opt) for opt in options]
                 
                 questions.append({
                     "question": clean_q,
-                    "options": options,
-                    "answer": options[0]
+                    "options": clean_opts,
+                    "answer": clean_opts[0] # Đáp án đầu tiên luôn là đáp án đúng gốc
                 })
     return questions
 
@@ -190,13 +197,29 @@ if role == "Học sinh":
                     # XÁO TRỘN ĐỀ THI RIÊNG TỪNG HỌC SINH
                     shuffled_key = f"shuffled_quiz_{selected_student}"
                     if shuffled_key not in st.session_state:
-                        user_quiz = [q.copy() for q in st.session_state.quiz_data]
+                        user_quiz = []
+                        labels = ['A', 'B', 'C', 'D', 'E', 'F']
                         
-                        # Đảo ngẫu nhiên các đáp án A, B, C, D
-                        for q in user_quiz:
-                            opts = q['options'].copy()
-                            random.shuffle(opts)
-                            q['options'] = opts
+                        for q in st.session_state.quiz_data:
+                            # Lấy nội dung gốc chưa dán nhãn
+                            raw_opts = [clean_option_prefix(opt) for opt in q['options']]
+                            raw_ans = clean_option_prefix(q['answer'])
+                            
+                            # Đảo vị trí các phương án
+                            random.shuffle(raw_opts)
+                            
+                            # Gắn lại nhãn A., B., C., D. theo thứ tự mới chuẩn
+                            labeled_opts = [f"{labels[i]}. {opt}" for i, opt in enumerate(raw_opts)]
+                            
+                            # Tìm vị trí đáp án đúng sau khi đảo để cập nhật nhãn đáp án
+                            ans_index = raw_opts.index(raw_ans) if raw_ans in raw_opts else 0
+                            labeled_ans = labeled_opts[ans_index]
+                            
+                            user_quiz.append({
+                                "question": clean_question_prefix(q['question']),
+                                "options": labeled_opts,
+                                "answer": labeled_ans
+                            })
                             
                         # Đảo ngẫu nhiên thứ tự các câu hỏi
                         random.shuffle(user_quiz)
@@ -210,11 +233,8 @@ if role == "Học sinh":
                     user_answers = {}
                     with st.form("quiz_form"):
                         for idx, q in enumerate(student_quiz):
-                            # Làm sạch tiền tố câu hỏi & định dạng toán
-                            clean_q_text = clean_question_prefix(q['question'])
-                            formatted_q = format_math_text(clean_q_text)
+                            formatted_q = format_math_text(q['question'])
                             
-                            # Hiển thị thứ tự câu chuẩn duy nhất 1 lần
                             st.markdown(f"**Câu {idx + 1}:** {formatted_q}")
                             
                             formatted_opts = [format_math_text(opt) for opt in q['options']]
@@ -308,10 +328,11 @@ else:
                         for _, row in df_q.iterrows():
                             cols = row.dropna().tolist()
                             if len(cols) >= 3:
+                                clean_opts = [clean_option_prefix(str(c)) for c in cols[1:]]
                                 parsed_q.append({
                                     "question": clean_question_prefix(str(cols[0])),
-                                    "options": [str(c) for c in cols[1:]],
-                                    "answer": str(cols[1])
+                                    "options": clean_opts,
+                                    "answer": clean_opts[0]
                                 })
                     if parsed_q:
                         st.session_state.quiz_data = parsed_q
@@ -324,22 +345,32 @@ else:
         with tab2:
             if st.session_state.quiz_data and st.session_state.users_db:
                 st.markdown("#### Cấu hình & Xem trước bộ câu hỏi GỐC:")
+                labels = ['A', 'B', 'C', 'D', 'E', 'F']
+                
                 for idx, q in enumerate(st.session_state.quiz_data):
                     clean_q_text = clean_question_prefix(q['question'])
                     formatted_q = format_math_text(clean_q_text)
                     
                     st.markdown(f"**Câu {idx+1}:** {formatted_q}")
                     
-                    formatted_opts = [format_math_text(opt) for opt in q['options']]
-                    current_ans = format_math_text(q.get('answer', q['options'][0]))
+                    # Chuẩn hóa A., B., C., D. cho màn hình giáo viên
+                    raw_opts = [clean_option_prefix(opt) for opt in q['options']]
+                    display_opts = [f"{labels[i]}. {format_math_text(opt)}" for i, opt in enumerate(raw_opts)]
                     
-                    correct_ans = st.selectbox(
+                    raw_ans = clean_option_prefix(q.get('answer', raw_opts[0]))
+                    current_index = raw_opts.index(raw_ans) if raw_ans in raw_opts else 0
+                    
+                    correct_ans_display = st.selectbox(
                         f"Đáp án đúng cho Câu {idx+1}:",
-                        options=formatted_opts,
-                        index=formatted_opts.index(current_ans) if current_ans in formatted_opts else 0,
+                        options=display_opts,
+                        index=current_index,
                         key=f"config_ans_{idx}"
                     )
-                    st.session_state.quiz_data[idx]['answer'] = correct_ans
+                    
+                    # Lưu lại nội dung đáp án gốc đã chọn
+                    selected_idx = display_opts.index(correct_ans_display)
+                    st.session_state.quiz_data[idx]['answer'] = raw_opts[selected_idx]
+                    st.session_state.quiz_data[idx]['options'] = raw_opts
                     st.write("---")
 
                 payload = {
