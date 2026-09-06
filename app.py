@@ -16,7 +16,7 @@ def encode_data(data):
         json_str = json.dumps(data, ensure_ascii=False)
         compressed = zlib.compress(json_str.encode('utf-8'))
         return base64.urlsafe_b64encode(compressed).decode('utf-8')
-    except Exception:
+    except Exception as e:
         return ""
 
 def decode_data(encoded_str):
@@ -24,10 +24,10 @@ def decode_data(encoded_str):
         compressed_bytes = base64.urlsafe_b64decode(encoded_str)
         decompressed = zlib.decompress(compressed_bytes)
         return json.loads(decompressed.decode('utf-8'))
-    except Exception:
+    except Exception as e:
         return None
 
-# Đọc dữ liệu từ URL
+# Đọc dữ liệu từ URL khi học sinh mở link
 query_params = st.query_params
 url_data = None
 if "data" in query_params:
@@ -42,6 +42,13 @@ if 'quiz_data' not in st.session_state:
 
 if 'results' not in st.session_state:
     st.session_state.results = url_data.get("results", {}) if url_data else {}
+
+# Đồng bộ nếu url_data có dữ liệu mới hơn
+if url_data:
+    if url_data.get("users"):
+        st.session_state.users_db = url_data.get("users")
+    if url_data.get("quiz"):
+        st.session_state.quiz_data = url_data.get("quiz")
 
 # Hàm bóc tách câu hỏi từ Word / TXT
 def parse_questions_from_text(text):
@@ -70,7 +77,7 @@ def parse_questions_from_text(text):
     return questions
 
 # ----------------------------------------------------
-# MÀN HÌNH ĐĂNG NHẬP CHUNG
+# MÀN HÌNH CHÍNH
 # ----------------------------------------------------
 st.title("🔐 HỆ THỐNG KIỂM TRA BÀI CŨ")
 
@@ -83,27 +90,27 @@ if role == "Học sinh":
     st.subheader("👨‍🎓 Dành Cho Học Sinh Làm Bài")
     
     if not st.session_state.users_db or not st.session_state.quiz_data:
-        st.warning("⚠️ Chưa có bộ đề bài kiểm tra! Vui lòng mở đúng Link do Giáo viên gửi qua Zalo.")
+        st.warning("⚠️ Chưa có bài kiểm tra nào được nạp hoặc Link bị thiếu dữ liệu! Vui lòng liên hệ Giáo viên để nhận Link chuẩn.")
     else:
-        # Lọc danh sách học sinh
-        student_names = [name for name, info in st.session_state.users_db.items() if info.get('role', 'Học sinh') == 'Học sinh']
+        # Lấy danh sách tên học sinh
+        student_names = list(st.session_state.users_db.keys())
         
         selected_student = st.selectbox("1. Chọn Họ và Tên của bạn:", ["-- Chọn tên bạn --"] + student_names)
         input_pass = st.text_input("2. Nhập Mật khẩu của bạn:", type="password")
         
         if selected_student != "-- Chọn tên bạn --" and input_pass:
-            correct_pass = str(st.session_state.users_db[selected_student]['password'])
+            correct_pass = str(st.session_state.users_db[selected_student]['password']).strip()
             
-            if input_pass.strip() != correct_pass.strip():
+            if input_pass.strip() != correct_pass:
                 st.error("❌ Mật khẩu không chính xác! Vui lòng kiểm tra lại.")
             else:
                 st.success(f"✅ Đăng nhập thành công! Xin chào học sinh **{selected_student}**")
                 
-                # Kiểm tra xem học sinh đã làm bài chưa
+                # Kiểm tra nếu học sinh đã làm bài
                 if selected_student in st.session_state.results:
                     res = st.session_state.results[selected_student]
                     st.warning(f"❌ Bạn đã hoàn thành bài kiểm tra này rồi!")
-                    st.info(f"📊 Kết quả của bạn: **{res['score']}/{res['total']} câu đúng** (Nộp lúc: {res['time']})")
+                    st.info(f"📊 Kết quả bài làm: **{res['score']}/{res['total']} câu đúng**")
                 else:
                     st.markdown("---")
                     st.markdown("### 📝 BÀI KIỂM TRA")
@@ -124,14 +131,10 @@ if role == "Học sinh":
                                 if user_answers[idx] == q['answer']:
                                     score += 1
                             
-                            import datetime
-                            now_str = datetime.datetime.now().strftime("%H:%M:%S %d/%m/%Y")
-                            
-                            # Lưu kết quả
+                            # Lưu kết quả bài làm
                             st.session_state.results[selected_student] = {
                                 "score": score,
-                                "total": total,
-                                "time": now_str
+                                "total": total
                             }
                             st.balloons()
                             st.success(f"🎉 Bạn đã nộp bài thành công! Kết quả: {score}/{total} câu đúng.")
@@ -142,36 +145,42 @@ if role == "Học sinh":
 else:
     st.subheader("👨‍🏫 Dành Cho Giáo Viên Quản Lý")
     
-    admin_pass = st.text_input("Nhập Mật khẩu Giáo viên (Mặc định: admin123):", type="password")
+    # Ẩn hoàn toàn thông báo mật khẩu mặc định
+    admin_pass = st.text_input("Nhập Mật khẩu Giáo viên:", type="password")
     
+    # Mật khẩu quản lý mặc định là admin123
     if admin_pass == "admin123":
-        st.success("✅ Đã mở khóa quyền Giáo viên!")
+        st.success("✅ Đã xác minh quyền Giáo viên thành công!")
         
-        tab1, tab2, tab3 = st.tabs(["1. Tải Đề & Danh Sách", "2. Duyệt Đáp Án & Lấy Link", "3. Xem Kết Quả Học Sinh"])
+        tab1, tab2, tab3 = st.tabs(["1. Tải Dữ Liệu", "2. Duyệt Đáp Án & Tạo Link Zalo", "3. Báo Cáo Kết Quả"])
         
         with tab1:
             st.markdown("#### A. Tải danh sách Học sinh & Mật khẩu")
-            st.caption("File Excel/CSV gồm 3 cột: Cột 1 (Họ Tên), Cột 2 (Mật Khẩu), Cột 3 (Vai trò: Học sinh/Giáo viên)")
-            users_file = st.file_uploader("Tải file Danh sách", type=["csv", "xlsx"])
+            st.caption("File Excel/CSV gồm: Cột 1 (Họ Tên), Cột 2 (Mật Khẩu - Tùy chọn). Nếu không có Cột Mật khẩu, hệ thống tự đặt mặc định là '123456'.")
+            users_file = st.file_uploader("Tải file Danh sách Lớp", type=["csv", "xlsx"])
             
             if users_file:
                 try:
                     if users_file.name.endswith('.csv'):
-                        df = pd.read_csv(users_file)
+                        df = pd.read_csv(users_file, header=None)
                     else:
-                        df = pd.read_excel(users_file)
+                        df = pd.read_excel(users_file, header=None)
                     
                     users_dict = {}
                     for _, row in df.iterrows():
-                        vals = row.dropna().tolist()
-                        if len(vals) >= 2:
-                            name = str(vals[0]).strip()
-                            pwd = str(vals[1]).strip()
-                            r = str(vals[2]).strip() if len(vals) >= 3 else "Học sinh"
-                            users_dict[name] = {"password": pwd, "role": r}
+                        vals = [str(v).strip() for v in row.dropna().tolist() if str(v).strip()]
+                        if vals:
+                            name = vals[0]
+                            # Loại bỏ các tiêu đề cột nếu có
+                            if name.lower() not in ['hoten', 'họ tên', 'ho ten', 'stt', 'tên học sinh', 'họ và tên']:
+                                pwd = vals[1] if len(vals) >= 2 else "123456"
+                                users_dict[name] = {"password": pwd}
                     
-                    st.session_state.users_db = users_dict
-                    st.success(f"✅ Đã nạp {len(users_dict)} tài khoản thành công!")
+                    if users_dict:
+                        st.session_state.users_db = users_dict
+                        st.success(f"✅ Đã nạp thành công {len(users_dict)} học sinh vào hệ thống!")
+                    else:
+                        st.error("Không bóc tách được danh sách tên từ file.")
                 except Exception as e:
                     st.error(f"Lỗi đọc file danh sách: {str(e)}")
 
@@ -202,13 +211,13 @@ else:
                                 })
                     if parsed_q:
                         st.session_state.quiz_data = parsed_q
-                        st.success(f"✅ Đã nạp {len(parsed_q)} câu hỏi!")
+                        st.success(f"✅ Đã nạp thành công {len(parsed_q)} câu hỏi!")
                 except Exception as e:
                     st.error(f"Lỗi đọc file câu hỏi: {str(e)}")
 
         with tab2:
             if st.session_state.quiz_data and st.session_state.users_db:
-                st.markdown("#### Cấu hình đáp án đúng:")
+                st.markdown("#### Cấu hình đáp án đúng cho câu hỏi:")
                 for idx, q in enumerate(st.session_state.quiz_data):
                     st.markdown(f"**Câu {idx+1}:** {q['question']}")
                     current_ans = q.get('answer', q['options'][0])
@@ -221,39 +230,37 @@ else:
                     st.session_state.quiz_data[idx]['answer'] = correct_ans
                     st.write("---")
 
-                # Tạo Link nén
+                # Mã hóa dữ liệu gói vào Link
                 payload = {
                     "users": st.session_state.users_db,
-                    "quiz": st.session_state.quiz_data,
-                    "results": st.session_state.results
+                    "quiz": st.session_state.quiz_data
                 }
                 encoded_str = encode_data(payload)
                 
                 app_url = st.context.headers.get("Host", "")
                 full_share_url = f"https://{app_url}/?data={encoded_str}" if app_url else f"?data={encoded_str}"
                 
-                st.subheader("🔗 LINK GỬI CHO HỌC SINH QUA ZALO:")
+                st.subheader("🔗 LINK BÀI KIỂM TRA GỬI QUA ZALO CHO HỌC SINH:")
                 st.code(full_share_url, language="text")
+                st.info("👉 Copy đường link trên và gửi cho học sinh. Khi học sinh bấm vào link, danh sách tên sẽ hiện đầy đủ!")
             else:
-                st.info("Vui lòng nạp đủ Danh sách và Câu hỏi ở Tab 1 trước.")
+                st.warning("⚠️ Vui lòng nạp đủ Danh sách học sinh và Bộ câu hỏi ở Tab 1 trước!")
 
         with tab3:
             st.markdown("#### 📊 THỐNG KÊ KẾT QUẢ BÀI LÀM")
             if not st.session_state.results:
-                st.info("Chưa có học sinh nào nộp bài.")
+                st.info("Chưa có học sinh nào nộp bài trong phiên này.")
             else:
-                total_students = len([k for k, v in st.session_state.users_db.items() if v.get('role') == 'Học sinh'])
+                total_students = len(st.session_state.users_db)
                 done_count = len(st.session_state.results)
                 
-                st.metric("Số học sinh đã hoàn thành:", f"{done_count}/{total_students}")
+                st.metric("Số học sinh đã làm bài:", f"{done_count}/{total_students}")
                 
-                # Bảng chi tiết
                 res_data = []
                 for student, data in st.session_state.results.items():
                     res_data.append({
-                        "Họ và Tên": student,
-                        "Số câu đúng": f"{data['score']}/{data['total']}",
-                        "Thời gian nộp": data['time']
+                        "Họ và Tên Học Sinh": student,
+                        "Kết quả làm bài": f"{data['score']}/{data['total']} câu đúng"
                     })
                 
                 df_res = pd.DataFrame(res_data)
