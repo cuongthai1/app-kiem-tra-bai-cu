@@ -58,7 +58,7 @@ def get_docx_text_with_math(docx_file):
     return "\n".join(full_text)
 
 # ----------------------------------------------------
-# HÀM XỬ LÝ KÝ HIỆU TOÁN & VẬT LÝ
+# HÀM XỬ LÝ KÝ HIỆU TOÁN & VẬT LÝ & LỌC CHỮ "CÂU X"
 # ----------------------------------------------------
 def format_math_text(text):
     if not isinstance(text, str):
@@ -68,6 +68,14 @@ def format_math_text(text):
     text = re.sub(r'\\\[(.*?)\\\]', r'$$\1$$', text)
     
     return text
+
+def clean_question_prefix(text):
+    """Xóa bỏ chữ 'Câu 1:', 'Câu 1.', 'Câu 6' ở đầu câu để tránh lặp khi trộn đề."""
+    if not isinstance(text, str):
+        return text
+    # Xóa các dạng "Câu 1:", "Câu 1.", "Câu 1 ", "Câu 10:"
+    cleaned = re.sub(r'^\s*Câu\s*\d+[\.\:\s]*', '', text, flags=re.IGNORECASE)
+    return cleaned.strip()
 
 # ----------------------------------------------------
 # HÀM NÉN & MÃ HÓA DỮ LIỆU
@@ -135,8 +143,11 @@ def parse_questions_from_text(text):
                 q_lines = [l.strip() for l in q_text.split('\n') if l.strip()]
                 full_q = " ".join(q_lines)
                 
+                # Tự động loại bỏ tiền tố "Câu X" thừa khi vừa bóc tách
+                clean_q = clean_question_prefix(full_q)
+                
                 questions.append({
-                    "question": full_q,
+                    "question": clean_q,
                     "options": options,
                     "answer": options[0]
                 })
@@ -176,15 +187,12 @@ if role == "Học sinh":
                     st.warning(f"❌ Bạn đã hoàn thành bài kiểm tra này rồi!")
                     st.info(f"📊 Kết quả bài làm: **{res['score']}/{res['total']} câu đúng**")
                 else:
-                    # ----------------------------------------------------
                     # XÁO TRỘN ĐỀ THI RIÊNG TỪNG HỌC SINH
-                    # ----------------------------------------------------
                     shuffled_key = f"shuffled_quiz_{selected_student}"
                     if shuffled_key not in st.session_state:
-                        # Copy bộ câu hỏi gốc
                         user_quiz = [q.copy() for q in st.session_state.quiz_data]
                         
-                        # Đảo ngẫu nhiên các đáp án A, B, C, D trong từng câu
+                        # Đảo ngẫu nhiên các đáp án A, B, C, D
                         for q in user_quiz:
                             opts = q['options'].copy()
                             random.shuffle(opts)
@@ -202,14 +210,15 @@ if role == "Học sinh":
                     user_answers = {}
                     with st.form("quiz_form"):
                         for idx, q in enumerate(student_quiz):
-                            formatted_q = format_math_text(q['question'])
+                            # Làm sạch tiền tố câu hỏi & định dạng toán
+                            clean_q_text = clean_question_prefix(q['question'])
+                            formatted_q = format_math_text(clean_q_text)
                             
-                            # Hiển thị thứ tự câu từ 1 -> hết
+                            # Hiển thị thứ tự câu chuẩn duy nhất 1 lần
                             st.markdown(f"**Câu {idx + 1}:** {formatted_q}")
                             
                             formatted_opts = [format_math_text(opt) for opt in q['options']]
                             
-                            # Mặc định không chọn đáp án nào
                             user_answers[idx] = st.radio(
                                 f"Chọn đáp án:", 
                                 formatted_opts, 
@@ -300,7 +309,7 @@ else:
                             cols = row.dropna().tolist()
                             if len(cols) >= 3:
                                 parsed_q.append({
-                                    "question": str(cols[0]),
+                                    "question": clean_question_prefix(str(cols[0])),
                                     "options": [str(c) for c in cols[1:]],
                                     "answer": str(cols[1])
                                 })
@@ -316,7 +325,9 @@ else:
             if st.session_state.quiz_data and st.session_state.users_db:
                 st.markdown("#### Cấu hình & Xem trước bộ câu hỏi GỐC:")
                 for idx, q in enumerate(st.session_state.quiz_data):
-                    formatted_q = format_math_text(q['question'])
+                    clean_q_text = clean_question_prefix(q['question'])
+                    formatted_q = format_math_text(clean_q_text)
+                    
                     st.markdown(f"**Câu {idx+1}:** {formatted_q}")
                     
                     formatted_opts = [format_math_text(opt) for opt in q['options']]
