@@ -21,11 +21,9 @@ st.markdown(
 # HÀM BÓC TÁCH XML CÔNG THỨC TOÁN WORD (OMML)
 # ----------------------------------------------------
 def get_docx_text_with_math(docx_file):
-    """Đọc file Docx bao gồm cả các công thức tạo bằng Word Equation (OMML)."""
     doc = docx.Document(docx_file)
     full_text = []
     
-    # Namespace của Microsoft Word XML
     ns = {
         'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main',
         'm': 'http://schemas.openxmlformats.org/officeDocument/2006/math'
@@ -35,21 +33,19 @@ def get_docx_text_with_math(docx_file):
         p_xml = ET.fromstring(p._p.xml)
         para_text = ""
         
-        # Duyệt qua từng đoạn văn bản hoặc khối công thức toán
         for child in p_xml:
             tag = child.tag.split('}')[-1]
-            if tag == 'r': # Văn bản thường
+            if tag == 'r':
                 texts = child.findall('.//w:t', ns)
                 for t in texts:
                     if t.text:
                         para_text += t.text
-            elif tag == 'oMath' or tag == 'oMathPara': # Công thức toán/lý
+            elif tag == 'oMath' or tag == 'oMathPara':
                 math_texts = child.findall('.//m:t', ns)
                 math_str = "".join([t.text for t in math_texts if t.text])
                 if math_str:
                     para_text += f" {math_str} "
             else:
-                # Tìm tất cả văn bản còn lại trong child
                 texts = child.findall('.//w:t', ns)
                 for t in texts:
                     if t.text:
@@ -67,7 +63,6 @@ def format_math_text(text):
     if not isinstance(text, str):
         return str(text)
     
-    # Chuẩn hóa các dấu đóng mở công thức
     text = re.sub(r'\\\((.*?)\\\)', r'$\1$', text)
     text = re.sub(r'\\\[(.*?)\\\]', r'$$\1$$', text)
     
@@ -119,7 +114,6 @@ if url_data:
 # ----------------------------------------------------
 def parse_questions_from_text(text):
     questions = []
-    # Tách bài học theo từng Câu (Câu 1., Câu 2.,...)
     blocks = re.split(r'\n(?=Câu\s*\d+[\.\:\s])', text, flags=re.IGNORECASE)
     
     for block in blocks:
@@ -127,14 +121,12 @@ def parse_questions_from_text(text):
         if not block:
             continue
         
-        # Tìm vị trí bắt đầu của các lựa chọn A., B., C., D.
         opt_match = re.search(r'(?=\b[A-D][\.\:\)])', block)
         
         if opt_match:
             q_text = block[:opt_match.start()].strip()
             opts_part = block[opt_match.start():].strip()
             
-            # Tách các đáp án A, B, C, D nằm trên cùng 1 dòng hoặc nhiều dòng
             raw_options = re.split(r'\s*(?=\b[A-D][\.\:\)])', opts_part)
             options = [o.strip() for o in raw_options if o.strip()]
             
@@ -145,7 +137,7 @@ def parse_questions_from_text(text):
                 questions.append({
                     "question": full_q,
                     "options": options,
-                    "answer": options[0]  # Mặc định lấy A làm đáp án mẫu
+                    "answer": options[0]
                 })
     return questions
 
@@ -193,26 +185,39 @@ if role == "Học sinh":
                             st.markdown(f"**{formatted_q}**")
                             
                             formatted_opts = [format_math_text(opt) for opt in q['options']]
-                            user_answers[idx] = st.radio(f"Chọn đáp án:", formatted_opts, key=f"q_{idx}")
+                            
+                            # Đặt index=None để MẶC ĐỊNH KHÔNG CÓ CHẤM ĐỎ nào được chọn
+                            user_answers[idx] = st.radio(
+                                f"Chọn đáp án:", 
+                                formatted_opts, 
+                                index=None, 
+                                key=f"q_{idx}"
+                            )
                             st.write("---")
                         
                         submit_btn = st.form_submit_button("NỘP BÀI KIỂM TRA")
                         
                         if submit_btn:
-                            score = 0
-                            total = len(st.session_state.quiz_data)
-                            for idx, q in enumerate(st.session_state.quiz_data):
-                                formatted_opts = [format_math_text(opt) for opt in q['options']]
-                                formatted_ans = format_math_text(q['answer'])
-                                if user_answers[idx] == formatted_ans or user_answers[idx] == formatted_opts[0]:
-                                    score += 1
+                            # Kiểm tra xem học sinh đã trả lời hết các câu chưa
+                            unanswered = [i + 1 for i, ans in user_answers.items() if ans is None]
                             
-                            st.session_state.results[selected_student] = {
-                                "score": score,
-                                "total": total
-                            }
-                            st.balloons()
-                            st.success(f"🎉 Bạn đã nộp bài thành công! Kết quả: {score}/{total} câu đúng.")
+                            if unanswered:
+                                st.error(f"⚠️ Bạn chưa chọn đáp án cho các câu: {', '.join(map(str, unanswered))}. Vui lòng hoàn thành tất cả các câu trước khi nộp!")
+                            else:
+                                score = 0
+                                total = len(st.session_state.quiz_data)
+                                for idx, q in enumerate(st.session_state.quiz_data):
+                                    formatted_opts = [format_math_text(opt) for opt in q['options']]
+                                    formatted_ans = format_math_text(q['answer'])
+                                    if user_answers[idx] == formatted_ans or user_answers[idx] == formatted_opts[0]:
+                                        score += 1
+                                
+                                st.session_state.results[selected_student] = {
+                                    "score": score,
+                                    "total": total
+                                }
+                                st.balloons()
+                                st.success(f"🎉 Bạn đã nộp bài thành công! Kết quả: {score}/{total} câu đúng.")
 
 # ----------------------------------------------------
 # PHẦN 2: GIAO DIỆN GIÁO VIÊN
@@ -262,7 +267,6 @@ else:
                 file_ext = quiz_file.name.split('.')[-1].lower()
                 try:
                     if file_ext == 'docx':
-                        # Gọi hàm đọc XML đặc biệt giải mã Word Equation
                         full_text = get_docx_text_with_math(quiz_file)
                         parsed_q = parse_questions_from_text(full_text)
                     elif file_ext == 'txt':
