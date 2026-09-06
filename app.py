@@ -22,21 +22,25 @@ if 'completed_students' not in st.session_state:
 if 'quiz_data' not in st.session_state:
     st.session_state.quiz_data = None
 
-# Hàm khởi tạo Gemini model tương thích linh hoạt
+# Hàm tự động quét và chọn mô hình khả dụng nhất từ API
 def get_working_model():
-    models_to_try = [
-        'gemini-1.5-flash',
-        'gemini-1.5-flash-latest',
-        'gemini-2.0-flash',
-        'gemini-2.5-flash',
-        'gemini-1.5-pro'
-    ]
-    for model_name in models_to_try:
-        try:
-            return genai.GenerativeModel(model_name)
-        except Exception:
-            continue
-    return genai.GenerativeModel('gemini-1.5-flash')
+    try:
+        models = genai.list_models()
+        for m in models:
+            if 'generateContent' in m.supported_generation_methods:
+                # Ưu tiên các mô hình thuộc dòng flash
+                if 'flash' in m.name:
+                    return genai.GenerativeModel(m.name)
+        
+        # Nếu không có flash, chọn mô hình đầu tiên hỗ trợ generateContent
+        for m in genai.list_models():
+            if 'generateContent' in m.supported_generation_methods:
+                return genai.GenerativeModel(m.name)
+    except Exception:
+        pass
+    
+    # Dự phòng mô hình mặc định
+    return genai.GenerativeModel('gemini-1.5-flash-latest')
 
 # Hàm bóc tách và tự động vá lỗi cấu trúc JSON khi sinh số lượng lớn câu hỏi
 def parse_json_safely(text):
@@ -46,12 +50,10 @@ def parse_json_safely(text):
     elif "```" in clean_text:
         clean_text = clean_text.split("```")[1].split("```")[0].strip()
     
-    # Tìm đoạn JSON mảng []
     match = re.search(r'\[.*\]', clean_text, re.DOTALL)
     if match:
         clean_text = match.group(0)
     else:
-        # Tự động vá ngoặc đóng nếu bị dở dang
         if clean_text.startswith("[") and not clean_text.endswith("]"):
             clean_text += "]"
 
@@ -105,7 +107,6 @@ with st.sidebar:
             try:
                 file_ext = lesson_file.name.split('.')[-1].lower()
                 
-                # Tối ưu hóa Prompt ngắn gọn và xuất dữ liệu nhanh
                 prompt = f"""
                 Bạn là giáo viên. Hãy tạo đúng {num_questions} câu hỏi trắc nghiệm lý thuyết từ bài học.
                 Yêu cầu:
