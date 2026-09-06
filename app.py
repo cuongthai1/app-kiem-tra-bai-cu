@@ -22,27 +22,14 @@ if 'completed_students' not in st.session_state:
 if 'quiz_data' not in st.session_state:
     st.session_state.quiz_data = None
 
-# Hàm tự động quét và chọn mô hình khả dụng nhất từ API
+# Gọi đúng mô hình gemini-3.6-flash theo yêu cầu của Google API
 def get_working_model():
     try:
-        models = genai.list_models()
-        for m in models:
-            if 'generateContent' in m.supported_generation_methods:
-                # Ưu tiên các mô hình thuộc dòng flash
-                if 'flash' in m.name:
-                    return genai.GenerativeModel(m.name)
-        
-        # Nếu không có flash, chọn mô hình đầu tiên hỗ trợ generateContent
-        for m in genai.list_models():
-            if 'generateContent' in m.supported_generation_methods:
-                return genai.GenerativeModel(m.name)
+        return genai.GenerativeModel('gemini-3.6-flash')
     except Exception:
-        pass
-    
-    # Dự phòng mô hình mặc định
-    return genai.GenerativeModel('gemini-1.5-flash-latest')
+        return genai.GenerativeModel('gemini-1.5-flash')
 
-# Hàm bóc tách và tự động vá lỗi cấu trúc JSON khi sinh số lượng lớn câu hỏi
+# Hàm bóc tách và tự động vá lỗi cấu trúc JSON
 def parse_json_safely(text):
     clean_text = text.strip()
     if "```json" in clean_text:
