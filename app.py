@@ -39,18 +39,26 @@ def parse_json_safely(text):
 
     return json.loads(clean_text)
 
-# Hàm sinh nội dung sử dụng các mô hình Gemini 1.5 ổn định (Hạn ngạch cao)
+# Hàm sinh nội dung tự động chọn model khả dụng thực tế trong tài khoản
 def generate_content_with_fallback(prompt_data):
-    # Sử dụng danh sách model 1.5 với quota lớn 1500 req/ngày
-    candidate_models = [
-        'gemini-1.5-flash-latest',
-        'gemini-1.5-flash',
-        'gemini-1.5-pro-latest',
-        'gemini-1.5-pro'
-    ]
+    # Lấy danh sách mô hình thực tế đang hoạt động từ Google API
+    try:
+        available_models = [m.name.replace('models/', '') for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+    except Exception:
+        available_models = []
+
+    # Danh sách mô hình ưu tiên
+    priority_list = ['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-1.5-flash-latest']
     
+    # Ghép các mô hình ưu tiên có trong danh sách khả dụng
+    models_to_try = [m for m in priority_list if m in available_models]
+    
+    # Nếu không trùng, lấy toàn bộ danh sách khả dụng hoặc dùng mặc định
+    if not models_to_try:
+        models_to_try = available_models if available_models else ['gemini-1.5-flash']
+
     last_error = None
-    for model_name in candidate_models:
+    for model_name in models_to_try:
         try:
             model = genai.GenerativeModel(model_name)
             res = model.generate_content(prompt_data)
