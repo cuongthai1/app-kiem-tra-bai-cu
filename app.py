@@ -8,53 +8,29 @@ import zlib
 
 st.set_page_config(page_title="Hệ Thống Kiểm Tra Bài Cũ", layout="centered")
 
-# Nhúng thư viện KaTeX/MathJax hỗ trợ hiển thị ký hiệu toán học mượt mà
+# Nhúng thư viện KaTeX hỗ trợ hiển thị công thức Lý / Toán
 st.markdown(
     """
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/katex.min.css">
-    <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/katex.min.css"></script>
     """,
     unsafe_allow_html=True
 )
 
 # ----------------------------------------------------
-# HÀM XỬ LÝ KÝ HIỆU TOÁN HỌC
+# HÀM XỬ LÝ KÝ HIỆU TOÁN & VẬT LÝ
 # ----------------------------------------------------
 def format_math_text(text):
-    """Chuyển đổi các ký hiệu toán thông thường/LaTeX sang dạng Streamlit LaTeX chuẩn."""
     if not isinstance(text, str):
         return str(text)
     
-    # 1. Chuyển đổi cú pháp LaTeX dạng \( ... \) hoặc \[ ... \] thành $ ... $
+    # Chuẩn hóa các biểu thức toán/lý cơ bản
     text = re.sub(r'\\\((.*?)\\\)', r'$\1$', text)
     text = re.sub(r'\\\[(.*?)\\\]', r'$$\1$$', text)
     
-    # 2. Thay thế một số ký hiệu toán Unicode phổ biến sang LaTeX nếu chưa có $
-    # Căn bậc hai
+    # Tự động nhận diện căn thức & phân số cơ bản nếu thiếu dấu $
     text = re.sub(r'√\((.*?)\)', r'$\\sqrt{\1}$', text)
     text = re.sub(r'√(\w+)', r'$\\sqrt{\1}$', text)
     
-    # Ký hiệu so sánh & phép toán
-    replacements = {
-        '≤': r'$\le$',
-        '≥': r'$\ge$',
-        '≠': r'$\neq$',
-        '±': r'$\pm$',
-        '∞': r'$\infty$',
-        'π': r'$\pi$',
-        'α': r'$\alpha$',
-        'β': r'$\beta$',
-        'Δ': r'$\Delta$',
-        '∈': r'$\in$',
-        '∉': r'$\notin$',
-        '⊂': r'$\subset$',
-        '∪': r'$\cup$',
-        '∩': r'$\cap$'
-    }
-    for orig, latex_sym in replacements.items():
-        if orig in text and '$' not in text:
-            text = text.replace(orig, latex_sym)
-            
     return text
 
 # ----------------------------------------------------
@@ -92,36 +68,46 @@ if 'quiz_data' not in st.session_state:
 if 'results' not in st.session_state:
     st.session_state.results = url_data.get("results", {}) if url_data else {}
 
-# Đồng bộ nếu url_data có dữ liệu mới
 if url_data:
     if url_data.get("users"):
         st.session_state.users_db = url_data.get("users")
     if url_data.get("quiz"):
         st.session_state.quiz_data = url_data.get("quiz")
 
-# Hàm bóc tách câu hỏi từ Word / TXT
+# ----------------------------------------------------
+# HÀM BÓC TÁCH CÂU HỎI TỪ WORD/TXT THÔNG MINH
+# ----------------------------------------------------
 def parse_questions_from_text(text):
     questions = []
-    blocks = re.split(r'\n(?=Câu\s*\d+|[0-9]+\.)', text, flags=re.IGNORECASE)
+    # Tách bài học theo từng Câu (Câu 1., Câu 2.,...)
+    blocks = re.split(r'\n(?=Câu\s*\d+[\.\:\s])', text, flags=re.IGNORECASE)
     
     for block in blocks:
         block = block.strip()
         if not block:
             continue
-        lines = [l.strip() for l in block.split('\n') if l.strip()]
-        if len(lines) >= 2:
-            q_text = lines[0]
-            options = []
-            for line in lines[1:]:
-                if re.match(r'^[A-Dd][\.\:\)].*', line):
-                    options.append(line)
-            if not options and len(lines) > 1:
-                options = lines[1:]
+        
+        # Tách A., B., C., D. ngay cả khi chúng nằm ngang trên cùng 1 dòng
+        # Tìm vị trí bắt đầu của đáp án A.
+        opt_match = re.search(r'(?=\b[A-D][\.\:\)])', block)
+        
+        if opt_match:
+            q_text = block[:opt_match.start()].strip()
+            opts_part = block[opt_match.start():].strip()
+            
+            # Tách thành các đáp án A, B, C, D
+            raw_options = re.split(r'\s*(?=\b[A-D][\.\:\)])', opts_part)
+            options = [o.strip() for o in raw_options if o.strip()]
+            
             if len(options) >= 2:
+                # Đảm bảo câu hỏi bắt đầu bằng "Câu X..."
+                q_lines = [l.strip() for l in q_text.split('\n') if l.strip()]
+                full_q = " ".join(q_lines)
+                
                 questions.append({
-                    "question": q_text,
+                    "question": full_q,
                     "options": options,
-                    "answer": options[0]
+                    "answer": options[0]  # Mặc định lấy đáp án A
                 })
     return questions
 
@@ -165,9 +151,8 @@ if role == "Học sinh":
                     user_answers = {}
                     with st.form("quiz_form"):
                         for idx, q in enumerate(st.session_state.quiz_data):
-                            # Định dạng công thức toán cho câu hỏi & đáp án
                             formatted_q = format_math_text(q['question'])
-                            st.markdown(f"**Câu {idx+1}:** {formatted_q}")
+                            st.markdown(f"**{formatted_q}**")
                             
                             formatted_opts = [format_math_text(opt) for opt in q['options']]
                             user_answers[idx] = st.radio(f"Chọn đáp án:", formatted_opts, key=f"q_{idx}")
@@ -231,8 +216,8 @@ else:
                     st.error(f"Lỗi đọc file danh sách: {str(e)}")
 
             st.markdown("---")
-            st.markdown("#### B. Tải bộ câu hỏi (Có chứa ký hiệu toán)")
-            quiz_file = st.file_uploader("Tải file câu hỏi (.docx, .txt, .xlsx)", type=["docx", "txt", "xlsx"])
+            st.markdown("#### B. Tải bộ câu hỏi (.docx, .txt, .xlsx)")
+            quiz_file = st.file_uploader("Tải file câu hỏi", type=["docx", "txt", "xlsx"])
             
             if quiz_file:
                 parsed_q = []
@@ -257,22 +242,22 @@ else:
                                 })
                     if parsed_q:
                         st.session_state.quiz_data = parsed_q
-                        st.success(f"✅ Đã nạp thành công {len(parsed_q)} câu hỏi toán!")
+                        st.success(f"✅ Đã nạp thành công {len(parsed_q)} câu hỏi!")
                 except Exception as e:
                     st.error(f"Lỗi đọc file câu hỏi: {str(e)}")
 
         with tab2:
             if st.session_state.quiz_data and st.session_state.users_db:
-                st.markdown("#### Cấu hình & Xem trước hiển thị toán học:")
+                st.markdown("#### Cấu hình & Xem trước bộ câu hỏi:")
                 for idx, q in enumerate(st.session_state.quiz_data):
                     formatted_q = format_math_text(q['question'])
-                    st.markdown(f"**Câu {idx+1}:** {formatted_q}")
+                    st.markdown(f"**{formatted_q}**")
                     
                     formatted_opts = [format_math_text(opt) for opt in q['options']]
                     current_ans = format_math_text(q.get('answer', q['options'][0]))
                     
                     correct_ans = st.selectbox(
-                        f"Đáp án đúng Câu {idx+1}:",
+                        f"Đáp án đúng cho Câu {idx+1}:",
                         options=formatted_opts,
                         index=formatted_opts.index(current_ans) if current_ans in formatted_opts else 0,
                         key=f"config_ans_{idx}"
