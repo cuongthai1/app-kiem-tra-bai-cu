@@ -39,12 +39,11 @@ def parse_json_safely(text):
 
     return json.loads(clean_text)
 
-# Hàm gọi trực tiếp model chuẩn nhất, không gọi list_models() gây treo app
+# Hàm gọi mô hình ổn định nhất (Ưu tiên gemini-1.5-flash)
 def generate_content_with_fallback(prompt_data):
-    # Sử dụng duy nhất các tên model chuẩn chính thức đang hoạt động
     candidate_models = [
         'gemini-1.5-flash',
-        'gemini-2.0-flash'
+        'gemini-1.5-flash-latest'
     ]
     
     last_error = None
