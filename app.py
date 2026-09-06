@@ -2,11 +2,12 @@ import streamlit as st
 import pandas as pd
 import google.generativeai as genai
 import json
+import re
 from PIL import Image
 import docx
 from pypdf import PdfReader
 
-# Lấy API Key tự động từ Streamlit Secrets
+# Lấy API Key từ Streamlit Secrets
 GEMINI_API_KEY = st.secrets.get("GEMINI_API_KEY", "")
 
 if GEMINI_API_KEY:
@@ -21,15 +22,40 @@ if 'completed_students' not in st.session_state:
 if 'quiz_data' not in st.session_state:
     st.session_state.quiz_data = None
 
-# Hàm khởi tạo mô hình Gemini tương thích với API Key
+# Hàm khởi tạo Gemini model tương thích linh hoạt
 def get_working_model():
-    try:
-        return genai.GenerativeModel('gemini-3.6-flash')
-    except Exception:
+    models_to_try = [
+        'gemini-1.5-flash',
+        'gemini-1.5-flash-latest',
+        'gemini-2.0-flash',
+        'gemini-2.5-flash',
+        'gemini-1.5-pro'
+    ]
+    for model_name in models_to_try:
         try:
-            return genai.GenerativeModel('gemini-2.0-flash')
+            return genai.GenerativeModel(model_name)
         except Exception:
-            return genai.GenerativeModel('gemini-1.5-flash')
+            continue
+    return genai.GenerativeModel('gemini-1.5-flash')
+
+# Hàm bóc tách và tự động vá lỗi cấu trúc JSON khi sinh số lượng lớn câu hỏi
+def parse_json_safely(text):
+    clean_text = text.strip()
+    if "```json" in clean_text:
+        clean_text = clean_text.split("```json")[1].split("```")[0].strip()
+    elif "```" in clean_text:
+        clean_text = clean_text.split("```")[1].split("```")[0].strip()
+    
+    # Tìm đoạn JSON mảng []
+    match = re.search(r'\[.*\]', clean_text, re.DOTALL)
+    if match:
+        clean_text = match.group(0)
+    else:
+        # Tự động vá ngoặc đóng nếu bị dở dang
+        if clean_text.startswith("[") and not clean_text.endswith("]"):
+            clean_text += "]"
+
+    return json.loads(clean_text)
 
 # ----------------------------------------------------
 # PHẦN 1: DÀNH CHO GIÁO VIÊN
@@ -75,22 +101,24 @@ with st.sidebar:
     num_questions = st.number_input("Số câu hỏi AI tự sinh:", min_value=1, max_value=20, value=5)
     
     if st.button("🚀 AI Tạo Câu Hỏi") and lesson_file:
-        with st.spinner("AI đang đọc tài liệu và soạn câu hỏi lý thuyết..."):
+        with st.spinner(f"AI đang soạn {num_questions} câu hỏi từ tài liệu, vui lòng chờ trong giây lát..."):
             try:
                 file_ext = lesson_file.name.split('.')[-1].lower()
+                
+                # Tối ưu hóa Prompt ngắn gọn và xuất dữ liệu nhanh
                 prompt = f"""
-                Bạn là giáo viên. Hãy đọc tài liệu bài học được cung cấp và tạo ra đúng {num_questions} câu hỏi trắc nghiệm lý thuyết để kiểm tra bài cũ học sinh.
-                Yêu cầu bắt buộc:
-                1. Trộn lẫn các mức độ Dễ, Khá, Khó để học sinh nắm vững bài.
-                2. Trả về ĐÚNG cấu trúc danh sách JSON thuần túy (KHÔNG chứa bất kỳ đoạn văn bản phụ nào, KHÔNG dùng thẻ markdown codeblock):
+                Bạn là giáo viên. Hãy tạo đúng {num_questions} câu hỏi trắc nghiệm lý thuyết từ bài học.
+                Yêu cầu:
+                - Kết quả trả về duy nhất 1 mảng JSON thuần túy theo đúng định dạng sau:
                 [
                     {{
-                        "question": "Nội dung câu hỏi?",
+                        "question": "Câu hỏi?",
                         "options": ["A. Đáp án 1", "B. Đáp án 2", "C. Đáp án 3", "D. Đáp án 4"],
                         "answer": "A. Đáp án 1",
                         "level": "Dễ"
                     }}
                 ]
+                Không được thêm bất kỳ văn bản chào hỏi hay giải thích nào bên ngoài mảng JSON.
                 """
                 
                 model = get_working_model()
@@ -123,10 +151,9 @@ with st.sidebar:
                     res = model.generate_content([prompt, img])
                     response_text = res.text
 
-                # Bóc tách JSON
-                clean_json = response_text.replace("```json", "").replace("```", "").strip()
-                st.session_state.quiz_data = json.loads(clean_json)
-                st.success("Tạo đề thành công!")
+                # Parse JSON an toàn
+                st.session_state.quiz_data = parse_json_safely(response_text)
+                st.success(f"Đã tạo thành công {len(st.session_state.quiz_data)} câu hỏi!")
 
             except Exception as e:
                 st.error(f"Chi tiết lỗi: {str(e)}")
@@ -160,7 +187,7 @@ else:
             user_answers = {}
             with st.form("quiz_form"):
                 for idx, q in enumerate(st.session_state.quiz_data):
-                    st.markdown(f"**Câu {idx+1} [{q['level']}]:** {q['question']}")
+                    st.markdown(f"**Câu {idx+1} [{q.get('level', 'Trung bình')}]:** {q['question']}")
                     user_answers[idx] = st.radio(f"Chọn đáp án:", q['options'], key=f"q_{idx}")
                     st.write("---")
                 
