@@ -22,7 +22,7 @@ if 'completed_students' not in st.session_state:
 if 'quiz_data' not in st.session_state:
     st.session_state.quiz_data = None
 
-# Hàm bóc tách và tự động vá lỗi cấu trúc JSON
+# Hàm bóc tách và tự động vá lỗi cấu trúc JSON khi tạo nhiều câu hỏi
 def parse_json_safely(text):
     clean_text = text.strip()
     if "```json" in clean_text:
@@ -39,14 +39,14 @@ def parse_json_safely(text):
 
     return json.loads(clean_text)
 
-# Hàm sinh nội dung có cơ chế tự động chuyển Model khi bị lỗi Quota (429)
+# Hàm sinh nội dung sử dụng các mô hình Gemini 1.5 ổn định (Hạn ngạch cao)
 def generate_content_with_fallback(prompt_data):
-    # Danh sách các model ưu tiên thử lần lượt
+    # Sử dụng danh sách model 1.5 với quota lớn 1500 req/ngày
     candidate_models = [
-        'gemini-1.5-flash',
         'gemini-1.5-flash-latest',
-        'gemini-1.5-pro',
-        'gemini-3.6-flash'
+        'gemini-1.5-flash',
+        'gemini-1.5-pro-latest',
+        'gemini-1.5-pro'
     ]
     
     last_error = None
@@ -57,7 +57,7 @@ def generate_content_with_fallback(prompt_data):
             return res.text
         except Exception as e:
             last_error = e
-            continue # Nếu model bị hết quota/lỗi, tự chuyển sang model tiếp theo
+            continue
             
     raise last_error
 
