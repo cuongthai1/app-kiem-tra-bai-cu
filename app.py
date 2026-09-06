@@ -5,6 +5,7 @@ import re
 import docx
 import base64
 import zlib
+import random
 import xml.etree.ElementTree as ET
 
 st.set_page_config(page_title="Hệ Thống Kiểm Tra Bài Cũ", layout="centered")
@@ -175,25 +176,45 @@ if role == "Học sinh":
                     st.warning(f"❌ Bạn đã hoàn thành bài kiểm tra này rồi!")
                     st.info(f"📊 Kết quả bài làm: **{res['score']}/{res['total']} câu đúng**")
                 else:
+                    # ----------------------------------------------------
+                    # XÁO TRỘN ĐỀ THI RIÊNG TỪNG HỌC SINH
+                    # ----------------------------------------------------
+                    shuffled_key = f"shuffled_quiz_{selected_student}"
+                    if shuffled_key not in st.session_state:
+                        # Copy bộ câu hỏi gốc
+                        user_quiz = [q.copy() for q in st.session_state.quiz_data]
+                        
+                        # Đảo ngẫu nhiên các đáp án A, B, C, D trong từng câu
+                        for q in user_quiz:
+                            opts = q['options'].copy()
+                            random.shuffle(opts)
+                            q['options'] = opts
+                            
+                        # Đảo ngẫu nhiên thứ tự các câu hỏi
+                        random.shuffle(user_quiz)
+                        st.session_state[shuffled_key] = user_quiz
+                    
+                    student_quiz = st.session_state[shuffled_key]
+
                     st.markdown("---")
-                    st.markdown("### 📝 BÀI KIỂM TRA")
+                    st.markdown("### 📝 BÀI KIỂM TRA (Đề đã được tạo ngẫu nhiên)")
                     
                     user_answers = {}
                     with st.form("quiz_form"):
-                        for idx, q in enumerate(st.session_state.quiz_data):
+                        for idx, q in enumerate(student_quiz):
                             formatted_q = format_math_text(q['question'])
                             
-                            # Hiển thị trực tiếp câu hỏi (Tránh bị lặp lại chữ 'Câu 1. Câu 1.')
-                            st.markdown(f"**{formatted_q}**")
+                            # Hiển thị thứ tự câu từ 1 -> hết
+                            st.markdown(f"**Câu {idx + 1}:** {formatted_q}")
                             
                             formatted_opts = [format_math_text(opt) for opt in q['options']]
                             
-                            # Bỏ chấm đỏ mặc định
+                            # Mặc định không chọn đáp án nào
                             user_answers[idx] = st.radio(
                                 f"Chọn đáp án:", 
                                 formatted_opts, 
                                 index=None, 
-                                key=f"q_{idx}"
+                                key=f"q_{selected_student}_{idx}"
                             )
                             st.write("---")
                         
@@ -206,11 +227,11 @@ if role == "Học sinh":
                                 st.error(f"⚠️ Bạn chưa chọn đáp án cho các câu: {', '.join(map(str, unanswered))}. Vui lòng hoàn thành tất cả các câu trước khi nộp!")
                             else:
                                 score = 0
-                                total = len(st.session_state.quiz_data)
-                                for idx, q in enumerate(st.session_state.quiz_data):
-                                    formatted_opts = [format_math_text(opt) for opt in q['options']]
+                                total = len(student_quiz)
+                                
+                                for idx, q in enumerate(student_quiz):
                                     formatted_ans = format_math_text(q['answer'])
-                                    if user_answers[idx] == formatted_ans or user_answers[idx] == formatted_opts[0]:
+                                    if user_answers[idx] == formatted_ans:
                                         score += 1
                                 
                                 st.session_state.results[selected_student] = {
@@ -293,12 +314,10 @@ else:
 
         with tab2:
             if st.session_state.quiz_data and st.session_state.users_db:
-                st.markdown("#### Cấu hình & Xem trước bộ câu hỏi:")
+                st.markdown("#### Cấu hình & Xem trước bộ câu hỏi GỐC:")
                 for idx, q in enumerate(st.session_state.quiz_data):
                     formatted_q = format_math_text(q['question'])
-                    
-                    # Hiển thị trực tiếp câu hỏi (Sửa lỗi lặp lại chữ 'Câu 1. Câu 1.')
-                    st.markdown(f"**{formatted_q}**")
+                    st.markdown(f"**Câu {idx+1}:** {formatted_q}")
                     
                     formatted_opts = [format_math_text(opt) for opt in q['options']]
                     current_ans = format_math_text(q.get('answer', q['options'][0]))
@@ -344,7 +363,6 @@ else:
                     })
                 
                 df_res = pd.DataFrame(res_data)
-                # Đánh số thứ tự chạy từ 1 thay vì 0
                 df_res.index = range(1, len(df_res) + 1)
                 
                 st.dataframe(df_res, use_container_width=True)
