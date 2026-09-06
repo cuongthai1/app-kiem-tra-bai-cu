@@ -6,10 +6,11 @@ from PIL import Image
 import docx
 from pypdf import PdfReader
 
-# CẤU HÌNH API KEY (Thay bằng mã khóa Google của bạn)
+# Lấy API Key từ Streamlit Secrets
 GEMINI_API_KEY = st.secrets.get("GEMINI_API_KEY", "")
 
-genai.configure(api_key=GEMINI_API_KEY)
+if GEMINI_API_KEY:
+    genai.configure(api_key=GEMINI_API_KEY)
 
 st.set_page_config(page_title="Kiểm Tra Bài Cũ", layout="centered")
 st.title("📚 App Kiểm Tra Bài Cũ Học Sinh")
@@ -19,6 +20,22 @@ if 'completed_students' not in st.session_state:
 
 if 'quiz_data' not in st.session_state:
     st.session_state.quiz_data = None
+
+# Hàm tự động chọn Model Gemini khả dụng với API Key
+def get_working_model():
+    try:
+        available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+        # Ưu tiên các dòng flash -> pro
+        for target in ['models/gemini-1.5-flash', 'models/gemini-1.5-pro', 'models/gemini-pro']:
+            if target in available_models:
+                return genai.GenerativeModel(target.replace('models/', ''))
+        # Nếu không thấy trong danh sách ưu tiên, lấy model hỗ trợ generateContent đầu tiên
+        if available_models:
+            return genai.GenerativeModel(available_models[0].replace('models/', ''))
+    except Exception:
+        pass
+    # Mặc định dự phòng
+    return genai.GenerativeModel('gemini-1.5-flash')
 
 # ----------------------------------------------------
 # PHẦN 1: DÀNH CHO GIÁO VIÊN
@@ -82,20 +99,17 @@ with st.sidebar:
                 ]
                 """
                 
-                model = genai.GenerativeModel('gemini-2.0-flash')
+                model = get_working_model()
                 response_text = ""
 
                 # Xử lý File PDF
                 if file_ext == 'pdf':
-                    # Đọc thử dạng text
                     reader = PdfReader(lesson_file)
                     extracted_text = "".join([page.extract_text() or "" for page in reader.pages]).strip()
                     
                     if len(extracted_text) > 50:
-                        # PDF chuẩn có text
                         res = model.generate_content([prompt, f"Nội dung bài học:\n{extracted_text}"])
                     else:
-                        # PDF dạng ảnh scan -> Gửi byte file trực tiếp cho Gemini AI xử lý
                         lesson_file.seek(0)
                         pdf_bytes = lesson_file.read()
                         pdf_part = {"mime_type": "application/pdf", "data": pdf_bytes}
