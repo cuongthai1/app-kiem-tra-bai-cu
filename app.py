@@ -3,8 +3,10 @@ import pandas as pd
 import google.generativeai as genai
 import json
 from PIL import Image
+import docx
+from pypdf import PdfReader
 
-# CẤU HÌNH API KEY (Dán mã khóa của bạn vào giữa 2 dấu ngoặc kép ở dòng dưới)
+# CẤU HÌNH API KEY (Thay bằng mã khóa Google của bạn)
 GEMINI_API_KEY = "AQ.Ab8RN6LAdAxqsS0oCV37oXpDBar1_zWEryngmzcomDPINt_tlw"
 
 genai.configure(api_key=GEMINI_API_KEY)
@@ -12,52 +14,87 @@ genai.configure(api_key=GEMINI_API_KEY)
 st.set_page_config(page_title="Kiểm Tra Bài Cũ", layout="centered")
 st.title("📚 App Kiểm Tra Bài Cũ Học Sinh")
 
-# Bộ nhớ lưu trữ tạm thời
 if 'completed_students' not in st.session_state:
     st.session_state.completed_students = set()
 
 if 'quiz_data' not in st.session_state:
     st.session_state.quiz_data = None
 
+# Hàm đọc nội dung từ File PDF, Word hoặc Ảnh
+def extract_content_from_file(uploaded_file):
+    file_type = uploaded_file.name.split('.')[-1].lower()
+    
+    if file_type == 'pdf':
+        reader = PdfReader(uploaded_file)
+        text = ""
+        for page in reader.pages:
+            text += page.extract_text() + "\n"
+        return "text", text
+        
+    elif file_type in ['docx', 'doc']:
+        doc = docx.Document(uploaded_file)
+        text = "\n".join([p.text for p in doc.paragraphs if p.text.strip()])
+        return "text", text
+        
+    elif file_type in ['jpg', 'jpeg', 'png']:
+        img = Image.open(uploaded_file)
+        return "image", img
+        
+    return None, None
+
 # ----------------------------------------------------
-# PHẦN 1: DÀNH CHO GIÁO VIÊN (Thanh bên trái)
+# PHẦN 1: DÀNH CHO GIÁO VIÊN
 # ----------------------------------------------------
 with st.sidebar:
     st.header("⚙️ DÀNH CHO GIÁO VIÊN")
     
     # 1. Tải danh sách học sinh
     st.subheader("1. Tải danh sách lớp")
-    students_file = st.file_uploader("Tải file Excel/CSV (Cần có cột tên là 'HoTen')", type=["csv", "xlsx"])
+    students_file = st.file_uploader("Tải file Excel/CSV", type=["csv", "xlsx"])
     student_list = []
+    
     if students_file:
         try:
             if students_file.name.endswith('.csv'):
-                df_students = pd.read_csv(students_file)
+                df = pd.read_csv(students_file, header=None)
             else:
-                df_students = pd.read_excel(students_file)
-            student_list = df_students['HoTen'].tolist()
-            st.success(f"Đã tải {len(student_list)} học sinh.")
-        except:
-            st.error("File Excel cần có cột tên đúng chữ: HoTen")
+                df = pd.read_excel(students_file, header=None)
+            
+            found_names = []
+            for col in df.columns:
+                for val in df[col].dropna():
+                    val_str = str(val).strip()
+                    if val_str and val_str.lower() not in ['hoten', 'họ tên', 'ho ten', 'stt', 'trạng thái', 'lớp']:
+                        if len(val_str) > 2 and not val_str.isdigit():
+                            found_names.append(val_str)
+            
+            student_list = [name for name in found_names if "HoTen" not in name and "Họ tên" not in name]
+            
+            if student_list:
+                st.success(f"Đã tải thành công {len(student_list)} học sinh!")
+            else:
+                st.error("Không tìm thấy danh sách tên trong file Excel.")
+        except Exception:
+            st.error("Lỗi đọc file Excel. Vui lòng kiểm tra lại định dạng file!")
 
-    # 2. Tải ảnh bài học
-    st.subheader("2. Tải ảnh nội dung bài học")
-    lesson_image = st.file_uploader("Tải ảnh chụp trang sách", type=["jpg", "jpeg", "png"])
+    # 2. Tải bài học (PDF, Word, Ảnh)
+    st.subheader("2. Tải tài liệu bài học")
+    lesson_file = st.file_uploader("Tải file PDF, Word (.docx) hoặc Ảnh", type=["pdf", "docx", "jpg", "jpeg", "png"])
     
-    # 3. Chọn số câu hỏi
+    # 3. Cấu hình câu hỏi
     st.subheader("3. Cấu hình câu hỏi")
     num_questions = st.number_input("Số câu hỏi AI tự sinh:", min_value=1, max_value=20, value=5)
     
-    # Nút tạo đề
-    if st.button("🚀 AI Tạo Câu Hỏi") and lesson_image:
-        with st.spinner("AI đang đọc sách và soạn câu hỏi lý thuyết..."):
+    if st.button("🚀 AI Tạo Câu Hỏi") and lesson_file:
+        with st.spinner("AI đang đọc tài liệu và soạn câu hỏi lý thuyết..."):
             try:
-                img = Image.open(lesson_image)
+                c_type, content = extract_content_from_file(lesson_file)
+                
                 prompt = f"""
-                Bạn là giáo viên. Đọc hình ảnh bài học này và tạo ra đúng {num_questions} câu hỏi trắc nghiệm lý thuyết để kiểm tra bài cũ.
+                Bạn là giáo viên. Đọc tài liệu bài học này và tạo ra đúng {num_questions} câu hỏi trắc nghiệm lý thuyết để kiểm tra bài cũ học sinh.
                 Yêu cầu:
                 1. Trộn lẫn các mức độ Dễ, Khá, Khó để học sinh nắm vững bài.
-                2. Trả về ĐÚNG định dạng JSON sau (không thêm văn bản ngoài):
+                2. Trả về ĐÚNG định dạng JSON theo mẫu sau (không kèm văn bản ngoài hay markdown):
                 [
                     {{
                         "question": "Nội dung câu hỏi?",
@@ -67,16 +104,20 @@ with st.sidebar:
                     }}
                 ]
                 """
+                
                 model = genai.GenerativeModel('gemini-1.5-flash')
-                response = model.generate_content([prompt, img])
+                
+                if c_type == "image":
+                    response = model.generate_content([prompt, content])
+                else:
+                    response = model.generate_content([prompt, f"Nội dung bài học:\n{content}"])
                 
                 clean_json = response.text.replace("```json", "").replace("```", "").strip()
                 st.session_state.quiz_data = json.loads(clean_json)
                 st.success("Tạo đề thành công!")
             except Exception as e:
-                st.error("Có lỗi xảy ra khi tạo câu hỏi. Hãy thử lại!")
+                st.error("Có lỗi xảy ra khi đọc file hoặc tạo câu hỏi. Hãy thử lại!")
 
-    # 4. Thống kê
     st.markdown("---")
     st.subheader("📊 THỐNG KÊ LÀM BÀI")
     st.metric("Số HS đã làm (Không tính trùng):", len(st.session_state.completed_students))
@@ -93,9 +134,8 @@ st.subheader("📝 Màn Hình Làm Bài Học Sinh")
 if not student_list:
     st.info("👈 Giáo viên vui lòng mở thanh menu bên trái để tải danh sách lớp và tạo đề trước!")
 elif not st.session_state.quiz_data:
-    st.info("👈 Giáo viên vui lòng tải ảnh trang sách và bấm 'AI Tạo Câu Hỏi'.")
+    st.info("👈 Giáo viên vui lòng tải tài liệu (PDF, Word, Ảnh) và bấm 'AI Tạo Câu Hỏi'.")
 else:
-    # Học sinh chọn tên
     selected_student = st.selectbox("👉 Chọn Họ và Tên của bạn:", ["-- Chọn đúng tên bạn --"] + student_list)
     
     if selected_student != "-- Chọn đúng tên bạn --":
@@ -120,7 +160,6 @@ else:
                         if user_answers[idx] == q['answer']:
                             score += 1
                     
-                    # Ghi nhận học sinh đã làm
                     st.session_state.completed_students.add(selected_student)
                     st.balloons()
                     st.success(f"🎉 Bạn đã nộp bài thành công! Kết quả: {score}/{total} câu đúng.")
