@@ -1,42 +1,26 @@
 import streamlit as st
 import pandas as pd
 import json
-import os
 import re
 import docx
-
-# Cấu hình đường dẫn lưu file dữ liệu chung trên server
-DATA_FILE = "app_database.json"
 
 st.set_page_config(page_title="Kiểm Tra Bài Cũ", layout="centered")
 st.title("📚 App Kiểm Tra Bài Cũ Học Sinh")
 
-# ----------------------------------------------------
-# HÀM ĐỌC / GHI DỮ LIỆU DÙNG CHUNG CHO TẤT CẢ USER
-# ----------------------------------------------------
-def load_global_data():
-    if os.path.exists(DATA_FILE):
-        try:
-            with open(DATA_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            pass
-    return {
-        "student_list": [],
-        "quiz_data": [],
-        "completed_students": []
-    }
+# Khởi tạo Session State toàn cục
+if 'student_list' not in st.session_state:
+    st.session_state.student_list = []
 
-def save_global_data(data):
-    with open(DATA_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=4)
+if 'quiz_data' not in st.session_state:
+    st.session_state.quiz_data = []
 
-# Load dữ liệu chung khi khởi chạy
-global_db = load_global_data()
+if 'completed_students' not in st.session_state:
+    st.session_state.completed_students = set()
 
-# Hàm hỗ trợ bóc tách câu hỏi từ Word/TXT
+# Hàm bóc tách câu hỏi linh hoạt từ text (Word/TXT)
 def parse_questions_from_text(text):
     questions = []
+    # Tách các đoạn dựa theo chữ "Câu X" hoặc "1.", "2."
     blocks = re.split(r'\n(?=Câu\s*\d+|[0-9]+\.)', text, flags=re.IGNORECASE)
     
     for block in blocks:
@@ -49,19 +33,24 @@ def parse_questions_from_text(text):
             q_text = lines[0]
             options = []
             for line in lines[1:]:
+                # Nhận diện các lựa chọn bắt đầu bằng A., B., C., D. hoặc A), B)...
                 if re.match(r'^[A-Dd][\.\:\)].*', line):
                     options.append(line)
             
+            # Nếu không tìm thấy dạng A. B., lấy các dòng sau làm đáp án
+            if not options and len(lines) > 1:
+                options = lines[1:]
+
             if len(options) >= 2:
                 questions.append({
                     "question": q_text,
                     "options": options,
-                    "answer": options[0]  # Mặc định lấy đáp án đầu
+                    "answer": options[0] # Mặc định chọn đáp án đầu
                 })
     return questions
 
 # ----------------------------------------------------
-# PHẦN 1: DÀNH CHO GIÁO VIÊN (CÀI ĐẶT & NẠP ĐỀ)
+# PHẦN 1: DÀNH CHO GIÁO VIÊN (SIDEBAR)
 # ----------------------------------------------------
 with st.sidebar:
     st.header("⚙️ DÀNH CHO GIÁO VIÊN")
@@ -85,23 +74,20 @@ with st.sidebar:
                         if len(val_str) > 2 and not val_str.isdigit():
                             found_names.append(val_str)
             
-            student_list = [name for name in found_names if "HoTen" not in name and "Họ tên" not in name]
+            st.session_state.student_list = [name for name in found_names if "HoTen" not in name and "Họ tên" not in name]
             
-            if student_list:
-                global_db["student_list"] = student_list
-                save_global_data(global_db)
-                st.success(f"Đã lưu {len(student_list)} học sinh vào hệ thống!")
-                st.rerun()
+            if st.session_state.student_list:
+                st.success(f"✅ Đã nạp {len(st.session_state.student_list)} học sinh!")
             else:
-                st.error("Không tìm thấy tên trong file.")
-        except Exception:
-            st.error("Lỗi đọc file danh sách học sinh!")
+                st.error("Không tìm thấy danh sách tên trong file.")
+        except Exception as e:
+            st.error(f"Lỗi đọc file học sinh: {str(e)}")
 
     st.markdown("---")
     
     # 2. Tải câu hỏi lên
     st.subheader("2. Tải bộ câu hỏi")
-    st.caption("Chấp nhận Word (.docx), TXT hoặc Excel (.xlsx)")
+    st.caption("Hỗ trợ file Word (.docx), TXT hoặc Excel (.xlsx)")
     quiz_file = st.file_uploader("Tải file câu hỏi", type=["docx", "txt", "xlsx"], key="quiz_upload")
     
     if quiz_file:
@@ -132,39 +118,29 @@ with st.sidebar:
                         })
             
             if parsed_q:
-                global_db["quiz_data"] = parsed_q
-                save_global_data(global_db)
-                st.success(f"Đã lưu {len(parsed_q)} câu hỏi vào hệ thống!")
-                st.rerun()
+                st.session_state.quiz_data = parsed_q
+                st.success(f"✅ Đã nạp thành công {len(parsed_q)} câu hỏi!")
+            else:
+                st.warning("Chưa bóc tách được câu hỏi. Hãy kiểm tra lại định dạng file!")
         except Exception as e:
             st.error(f"Lỗi đọc file câu hỏi: {str(e)}")
 
     st.markdown("---")
-    # Nút xóa dữ liệu làm mới bài kiểm tra
-    if st.button("🗑️ Đặt lại / Xóa bài kiểm tra này"):
-        if os.path.exists(DATA_FILE):
-            os.remove(DATA_FILE)
-        st.success("Đã xóa toàn bộ dữ liệu! Bạn có thể nạp bài mới.")
-        st.rerun()
-
-    st.markdown("---")
     st.subheader("📊 THỐNG KÊ LÀM BÀI")
-    completed = global_db.get("completed_students", [])
-    st.metric("Số HS đã nộp bài:", len(completed))
-    if completed:
+    st.metric("Số HS đã nộp bài:", len(st.session_state.completed_students))
+    if st.session_state.completed_students:
         st.write("Danh sách HS đã nộp:")
-        for name in completed:
+        for name in st.session_state.completed_students:
             st.write(f"- {name}")
 
 # ----------------------------------------------------
-# PHẦN 2: CHỈNH SỬA & CHỌN ĐÁP ÁN ĐÚNG (GIÁO VIÊN)
+# PHẦN 2: GIÁO VIÊN DUYỆT ĐÁP ÁN ĐÚNG
 # ----------------------------------------------------
-if global_db.get("quiz_data"):
-    with st.expander("📝 ĐÁP ÁN ĐÚNG CỦA BỘ CÂU HỎI (GIÁO VIÊN)", expanded=False):
-        st.info("Bấm vào đây để xem hoặc thay đổi đáp án đúng trước khi học sinh làm bài:")
+if st.session_state.quiz_data:
+    with st.expander("📝 CẤU HÌNH ĐÁP ÁN ĐÚNG (GIÁO VIÊN DUYỆT)", expanded=True):
+        st.info("Hãy tích chọn chính xác đáp án đúng cho từng câu dưới đây:")
         
-        has_changed = False
-        for idx, q in enumerate(global_db["quiz_data"]):
+        for idx, q in enumerate(st.session_state.quiz_data):
             st.markdown(f"**Câu {idx+1}:** {q['question']}")
             
             current_ans = q.get('answer', q['options'][0])
@@ -174,40 +150,30 @@ if global_db.get("quiz_data"):
                 index=q['options'].index(current_ans) if current_ans in q['options'] else 0,
                 key=f"config_ans_{idx}"
             )
-            if correct_ans != current_ans:
-                global_db["quiz_data"][idx]['answer'] = correct_ans
-                has_changed = True
+            st.session_state.quiz_data[idx]['answer'] = correct_ans
             st.write("---")
-        
-        if has_changed:
-            save_global_data(global_db)
-            st.success("Đã cập nhật đáp án đúng!")
 
 # ----------------------------------------------------
 # PHẦN 3: DÀNH CHO HỌC SINH LÀM BÀI
 # ----------------------------------------------------
 st.subheader("📝 Màn Hình Làm Bài Học Sinh")
 
-student_list = global_db.get("student_list", [])
-quiz_data = global_db.get("quiz_data", [])
-completed_students = global_db.get("completed_students", [])
-
-if not student_list:
-    st.info("👈 Giáo viên vui lòng mở menu bên trái để tải danh sách lớp lên trước!")
-elif not quiz_data:
-    st.info("👈 Giáo viên vui lòng mở menu bên trái để tải file câu hỏi lên trước!")
+if not st.session_state.student_list:
+    st.info("👈 Giáo viên vui lòng mở thanh menu bên trái để tải danh sách lớp!")
+elif not st.session_state.quiz_data:
+    st.info("👈 Giáo viên vui lòng mở thanh menu bên trái để tải file câu hỏi lên!")
 else:
-    selected_student = st.selectbox("👉 Chọn Họ và Tên của bạn:", ["-- Chọn đúng tên bạn --"] + student_list)
+    selected_student = st.selectbox("👉 Chọn Họ và Tên của bạn:", ["-- Chọn đúng tên bạn --"] + st.session_state.student_list)
     
     if selected_student != "-- Chọn đúng tên bạn --":
-        if selected_student in completed_students:
+        if selected_student in st.session_state.completed_students:
             st.warning(f"❌ Học sinh **{selected_student}** đã hoàn thành bài kiểm tra này rồi! Bạn không thể làm lại.")
         else:
             st.success(f"Xin chào **{selected_student}**, hãy trả lời các câu hỏi dưới đây:")
             
             user_answers = {}
             with st.form("quiz_form"):
-                for idx, q in enumerate(quiz_data):
+                for idx, q in enumerate(st.session_state.quiz_data):
                     st.markdown(f"**Câu {idx+1}:** {q['question']}")
                     user_answers[idx] = st.radio(f"Chọn đáp án:", q['options'], key=f"student_q_{idx}")
                     st.write("---")
@@ -216,15 +182,11 @@ else:
                 
                 if submit_btn:
                     score = 0
-                    total = len(quiz_data)
-                    for idx, q in enumerate(quiz_data):
+                    total = len(st.session_state.quiz_data)
+                    for idx, q in enumerate(st.session_state.quiz_data):
                         if user_answers[idx] == q['answer']:
                             score += 1
                     
-                    # Cập nhật danh sách đã làm bài vào file chung
-                    if selected_student not in global_db["completed_students"]:
-                        global_db["completed_students"].append(selected_student)
-                        save_global_data(global_db)
-                    
+                    st.session_state.completed_students.add(selected_student)
                     st.balloons()
                     st.success(f"🎉 Bạn đã nộp bài thành công! Kết quả: {score}/{total} câu đúng.")
