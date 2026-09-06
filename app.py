@@ -82,7 +82,7 @@ with st.sidebar:
                 ]
                 """
                 
-                model = genai.GenerativeModel('gemini-1.5-flash-latest')
+                model = genai.GenerativeModel('gemini-2.0-flash')
                 response_text = ""
 
                 # Xử lý File PDF
