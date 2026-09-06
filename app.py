@@ -3,6 +3,7 @@ import pandas as pd
 import google.generativeai as genai
 import json
 import re
+import time
 from PIL import Image
 import docx
 from pypdf import PdfReader
@@ -22,7 +23,7 @@ if 'completed_students' not in st.session_state:
 if 'quiz_data' not in st.session_state:
     st.session_state.quiz_data = None
 
-# Hàm bóc tách và tự động vá lỗi cấu trúc JSON khi tạo nhiều câu hỏi
+# Hàm bóc tách JSON an toàn
 def parse_json_safely(text):
     clean_text = text.strip()
     if "```json" in clean_text:
@@ -39,24 +40,24 @@ def parse_json_safely(text):
 
     return json.loads(clean_text)
 
-# Hàm gọi mô hình ổn định nhất (Ưu tiên gemini-1.5-flash)
-def generate_content_with_fallback(prompt_data):
-    candidate_models = [
-        'gemini-1.5-flash',
-        'gemini-1.5-flash-latest'
-    ]
+# Hàm gọi AI chuẩn xác - Cố định model gemini-1.5-flash và tự động Retry nếu bận
+def generate_content_stable(prompt_data):
+    # Sử dụng mô hình chuẩn nhất của Google có 1500 req/ngày miễn phí
+    model = genai.GenerativeModel('gemini-1.5-flash')
     
-    last_error = None
-    for model_name in candidate_models:
+    max_retries = 3
+    for attempt in range(max_retries):
         try:
-            model = genai.GenerativeModel(model_name)
             res = model.generate_content(prompt_data)
             return res.text
         except Exception as e:
-            last_error = e
-            continue
-            
-    raise last_error
+            err_msg = str(e)
+            # Nếu dính lỗi 429 (nghẽn tần suất), chờ 3 giây rồi thử lại
+            if "429" in err_msg and attempt < max_retries - 1:
+                time.sleep(3)
+                continue
+            else:
+                raise e
 
 # ----------------------------------------------------
 # PHẦN 1: DÀNH CHO GIÁO VIÊN
@@ -129,23 +130,23 @@ with st.sidebar:
                     extracted_text = "".join([page.extract_text() or "" for page in reader.pages]).strip()
                     
                     if len(extracted_text) > 50:
-                        response_text = generate_content_with_fallback([prompt, f"Nội dung bài học:\n{extracted_text}"])
+                        response_text = generate_content_stable([prompt, f"Nội dung bài học:\n{extracted_text}"])
                     else:
                         lesson_file.seek(0)
                         pdf_bytes = lesson_file.read()
                         pdf_part = {"mime_type": "application/pdf", "data": pdf_bytes}
-                        response_text = generate_content_with_fallback([prompt, pdf_part])
+                        response_text = generate_content_stable([prompt, pdf_part])
 
                 # Xử lý File Word (.docx)
                 elif file_ext in ['docx', 'doc']:
                     doc = docx.Document(lesson_file)
                     doc_text = "\n".join([p.text for p in doc.paragraphs if p.text.strip()])
-                    response_text = generate_content_with_fallback([prompt, f"Nội dung bài học:\n{doc_text}"])
+                    response_text = generate_content_stable([prompt, f"Nội dung bài học:\n{doc_text}"])
 
                 # Xử lý File Ảnh
                 elif file_ext in ['jpg', 'jpeg', 'png']:
                     img = Image.open(lesson_file)
-                    response_text = generate_content_with_fallback([prompt, img])
+                    response_text = generate_content_stable([prompt, img])
 
                 # Parse JSON an toàn
                 st.session_state.quiz_data = parse_json_safely(response_text)
