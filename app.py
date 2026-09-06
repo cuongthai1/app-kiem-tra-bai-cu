@@ -182,11 +182,13 @@ if role == "Học sinh":
                     with st.form("quiz_form"):
                         for idx, q in enumerate(st.session_state.quiz_data):
                             formatted_q = format_math_text(q['question'])
+                            
+                            # Hiển thị trực tiếp câu hỏi (Tránh bị lặp lại chữ 'Câu 1. Câu 1.')
                             st.markdown(f"**{formatted_q}**")
                             
                             formatted_opts = [format_math_text(opt) for opt in q['options']]
                             
-                            # Đặt index=None để MẶC ĐỊNH KHÔNG CÓ CHẤM ĐỎ nào được chọn
+                            # Bỏ chấm đỏ mặc định
                             user_answers[idx] = st.radio(
                                 f"Chọn đáp án:", 
                                 formatted_opts, 
@@ -198,7 +200,6 @@ if role == "Học sinh":
                         submit_btn = st.form_submit_button("NỘP BÀI KIỂM TRA")
                         
                         if submit_btn:
-                            # Kiểm tra xem học sinh đã trả lời hết các câu chưa
                             unanswered = [i + 1 for i, ans in user_answers.items() if ans is None]
                             
                             if unanswered:
@@ -295,6 +296,8 @@ else:
                 st.markdown("#### Cấu hình & Xem trước bộ câu hỏi:")
                 for idx, q in enumerate(st.session_state.quiz_data):
                     formatted_q = format_math_text(q['question'])
+                    
+                    # Hiển thị trực tiếp câu hỏi (Sửa lỗi lặp lại chữ 'Câu 1. Câu 1.')
                     st.markdown(f"**{formatted_q}**")
                     
                     formatted_opts = [format_math_text(opt) for opt in q['options']]
@@ -341,6 +344,9 @@ else:
                     })
                 
                 df_res = pd.DataFrame(res_data)
+                # Đánh số thứ tự chạy từ 1 thay vì 0
+                df_res.index = range(1, len(df_res) + 1)
+                
                 st.dataframe(df_res, use_container_width=True)
     elif admin_pass:
         st.error("❌ Mật khẩu Giáo viên không chính xác!")
