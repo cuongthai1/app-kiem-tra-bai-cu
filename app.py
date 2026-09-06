@@ -22,13 +22,6 @@ if 'completed_students' not in st.session_state:
 if 'quiz_data' not in st.session_state:
     st.session_state.quiz_data = None
 
-# Gọi đúng mô hình gemini-3.6-flash theo yêu cầu của Google API
-def get_working_model():
-    try:
-        return genai.GenerativeModel('gemini-3.6-flash')
-    except Exception:
-        return genai.GenerativeModel('gemini-1.5-flash')
-
 # Hàm bóc tách và tự động vá lỗi cấu trúc JSON
 def parse_json_safely(text):
     clean_text = text.strip()
@@ -45,6 +38,28 @@ def parse_json_safely(text):
             clean_text += "]"
 
     return json.loads(clean_text)
+
+# Hàm sinh nội dung có cơ chế tự động chuyển Model khi bị lỗi Quota (429)
+def generate_content_with_fallback(prompt_data):
+    # Danh sách các model ưu tiên thử lần lượt
+    candidate_models = [
+        'gemini-1.5-flash',
+        'gemini-1.5-flash-latest',
+        'gemini-1.5-pro',
+        'gemini-3.6-flash'
+    ]
+    
+    last_error = None
+    for model_name in candidate_models:
+        try:
+            model = genai.GenerativeModel(model_name)
+            res = model.generate_content(prompt_data)
+            return res.text
+        except Exception as e:
+            last_error = e
+            continue # Nếu model bị hết quota/lỗi, tự chuyển sang model tiếp theo
+            
+    raise last_error
 
 # ----------------------------------------------------
 # PHẦN 1: DÀNH CHO GIÁO VIÊN
@@ -109,7 +124,6 @@ with st.sidebar:
                 Không được thêm bất kỳ văn bản chào hỏi hay giải thích nào bên ngoài mảng JSON.
                 """
                 
-                model = get_working_model()
                 response_text = ""
 
                 # Xử lý File PDF
@@ -118,26 +132,23 @@ with st.sidebar:
                     extracted_text = "".join([page.extract_text() or "" for page in reader.pages]).strip()
                     
                     if len(extracted_text) > 50:
-                        res = model.generate_content([prompt, f"Nội dung bài học:\n{extracted_text}"])
+                        response_text = generate_content_with_fallback([prompt, f"Nội dung bài học:\n{extracted_text}"])
                     else:
                         lesson_file.seek(0)
                         pdf_bytes = lesson_file.read()
                         pdf_part = {"mime_type": "application/pdf", "data": pdf_bytes}
-                        res = model.generate_content([prompt, pdf_part])
-                    response_text = res.text
+                        response_text = generate_content_with_fallback([prompt, pdf_part])
 
                 # Xử lý File Word (.docx)
                 elif file_ext in ['docx', 'doc']:
                     doc = docx.Document(lesson_file)
                     doc_text = "\n".join([p.text for p in doc.paragraphs if p.text.strip()])
-                    res = model.generate_content([prompt, f"Nội dung bài học:\n{doc_text}"])
-                    response_text = res.text
+                    response_text = generate_content_with_fallback([prompt, f"Nội dung bài học:\n{doc_text}"])
 
                 # Xử lý File Ảnh
                 elif file_ext in ['jpg', 'jpeg', 'png']:
                     img = Image.open(lesson_file)
-                    res = model.generate_content([prompt, img])
-                    response_text = res.text
+                    response_text = generate_content_with_fallback([prompt, img])
 
                 # Parse JSON an toàn
                 st.session_state.quiz_data = parse_json_safely(response_text)
