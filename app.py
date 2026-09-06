@@ -6,7 +6,7 @@ from PIL import Image
 import docx
 from pypdf import PdfReader
 
-# Lấy API Key từ Streamlit Secrets
+# Lấy API Key tự động từ Streamlit Secrets
 GEMINI_API_KEY = st.secrets.get("GEMINI_API_KEY", "")
 
 if GEMINI_API_KEY:
@@ -21,18 +21,15 @@ if 'completed_students' not in st.session_state:
 if 'quiz_data' not in st.session_state:
     st.session_state.quiz_data = None
 
-# Hàm tự động chọn Model Gemini khả dụng với API Key
-# Hàm chọn Model Gemini khả dụng
+# Hàm khởi tạo mô hình Gemini tương thích với API Key
 def get_working_model():
     try:
-        # Thử sử dụng mô hình gemini-2.0-flash mới
-        return genai.GenerativeModel('gemini-2.0-flash')
+        return genai.GenerativeModel('gemini-3.6-flash')
     except Exception:
-        # Dự phòng mô hình gemini-1.5-flash
-        return genai.GenerativeModel('gemini-1.5-flash')
-        pass
-    # Mặc định dự phòng
-    return genai.GenerativeModel('gemini-1.5-flash')
+        try:
+            return genai.GenerativeModel('gemini-2.0-flash')
+        except Exception:
+            return genai.GenerativeModel('gemini-1.5-flash')
 
 # ----------------------------------------------------
 # PHẦN 1: DÀNH CHO GIÁO VIÊN
