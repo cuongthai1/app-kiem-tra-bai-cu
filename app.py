@@ -1,63 +1,44 @@
 import streamlit as st
 import pandas as pd
-import google.generativeai as genai
 import json
 import re
-import time
-from PIL import Image
 import docx
-from pypdf import PdfReader
-
-# Lấy API Key từ Streamlit Secrets
-GEMINI_API_KEY = st.secrets.get("GEMINI_API_KEY", "")
-
-if GEMINI_API_KEY:
-    genai.configure(api_key=GEMINI_API_KEY)
 
 st.set_page_config(page_title="Kiểm Tra Bài Cũ", layout="centered")
 st.title("📚 App Kiểm Tra Bài Cũ Học Sinh")
 
+# Khởi tạo lưu trữ trong session
 if 'completed_students' not in st.session_state:
     st.session_state.completed_students = set()
 
 if 'quiz_data' not in st.session_state:
-    st.session_state.quiz_data = None
+    st.session_state.quiz_data = []
 
-# Hàm bóc tách JSON an toàn
-def parse_json_safely(text):
-    clean_text = text.strip()
-    if "```json" in clean_text:
-        clean_text = clean_text.split("```json")[1].split("```")[0].strip()
-    elif "```" in clean_text:
-        clean_text = clean_text.split("```")[1].split("```")[0].strip()
+# Hàm hỗ trợ đọc câu hỏi từ file Word/TXT
+def parse_questions_from_text(text):
+    questions = []
+    blocks = re.split(r'\n(?=Câu\s*\d+|[0-9]+\.)', text, flags=re.IGNORECASE)
     
-    match = re.search(r'\[.*\]', clean_text, re.DOTALL)
-    if match:
-        clean_text = match.group(0)
-    else:
-        if clean_text.startswith("[") and not clean_text.endswith("]"):
-            clean_text += "]"
-
-    return json.loads(clean_text)
-
-# Hàm gọi AI chuẩn xác - Cố định model gemini-1.5-flash và tự động Retry nếu bận
-def generate_content_stable(prompt_data):
-    # Sử dụng mô hình chuẩn nhất của Google có 1500 req/ngày miễn phí
-    model = genai.GenerativeModel('gemini-1.5-flash')
-    
-    max_retries = 3
-    for attempt in range(max_retries):
-        try:
-            res = model.generate_content(prompt_data)
-            return res.text
-        except Exception as e:
-            err_msg = str(e)
-            # Nếu dính lỗi 429 (nghẽn tần suất), chờ 3 giây rồi thử lại
-            if "429" in err_msg and attempt < max_retries - 1:
-                time.sleep(3)
-                continue
-            else:
-                raise e
+    for block in blocks:
+        block = block.strip()
+        if not block:
+            continue
+        
+        lines = [l.strip() for l in block.split('\n') if l.strip()]
+        if len(lines) >= 2:
+            q_text = lines[0]
+            options = []
+            for line in lines[1:]:
+                if re.match(r'^[A-Dd][\.\:\)].*', line):
+                    options.append(line)
+            
+            if len(options) >= 2:
+                questions.append({
+                    "question": q_text,
+                    "options": options,
+                    "answer": options[0]  # Mặc định chọn đáp án đầu tiên
+                })
+    return questions
 
 # ----------------------------------------------------
 # PHẦN 1: DÀNH CHO GIÁO VIÊN
@@ -67,7 +48,7 @@ with st.sidebar:
     
     # 1. Tải danh sách học sinh
     st.subheader("1. Tải danh sách lớp")
-    students_file = st.file_uploader("Tải file Excel/CSV", type=["csv", "xlsx"])
+    students_file = st.file_uploader("Tải file Excel/CSV danh sách lớp", type=["csv", "xlsx"], key="students_upload")
     student_list = []
     
     if students_file:
@@ -88,90 +69,91 @@ with st.sidebar:
             student_list = [name for name in found_names if "HoTen" not in name and "Họ tên" not in name]
             
             if student_list:
-                st.success(f"Đã tải thành công {len(student_list)} học sinh!")
+                st.success(f"Đã tải {len(student_list)} học sinh!")
             else:
-                st.error("Không tìm thấy danh sách tên trong file Excel.")
+                st.error("Không tìm thấy danh sách tên trong file.")
         except Exception:
-            st.error("Lỗi đọc file Excel. Vui lòng kiểm tra lại định dạng file!")
+            st.error("Lỗi đọc file danh sách học sinh!")
 
-    # 2. Tải bài học (PDF, Word, Ảnh)
-    st.subheader("2. Tải tài liệu bài học")
-    lesson_file = st.file_uploader("Tải file PDF, Word (.docx) hoặc Ảnh", type=["pdf", "docx", "jpg", "jpeg", "png"])
+    st.markdown("---")
     
-    # 3. Cấu hình câu hỏi
-    st.subheader("3. Cấu hình câu hỏi")
-    num_questions = st.number_input("Số câu hỏi AI tự sinh:", min_value=1, max_value=20, value=5)
+    # 2. Tải câu hỏi lên
+    st.subheader("2. Tải bộ câu hỏi")
+    st.caption("Chấp nhận file Word (.docx), TXT hoặc Excel (.xlsx)")
+    quiz_file = st.file_uploader("Tải file câu hỏi", type=["docx", "txt", "xlsx"], key="quiz_upload")
     
-    if st.button("🚀 AI Tạo Câu Hỏi") and lesson_file:
-        with st.spinner(f"AI đang soạn {num_questions} câu hỏi từ tài liệu, vui lòng chờ trong giây lát..."):
-            try:
-                file_ext = lesson_file.name.split('.')[-1].lower()
+    if quiz_file:
+        parsed_q = []
+        file_ext = quiz_file.name.split('.')[-1].lower()
+        
+        try:
+            if file_ext == 'docx':
+                doc = docx.Document(quiz_file)
+                full_text = "\n".join([p.text for p in doc.paragraphs if p.text.strip()])
+                parsed_q = parse_questions_from_text(full_text)
                 
-                prompt = f"""
-                Bạn là giáo viên. Hãy tạo đúng {num_questions} câu hỏi trắc nghiệm lý thuyết từ bài học.
-                Yêu cầu:
-                - Kết quả trả về duy nhất 1 mảng JSON thuần túy theo đúng định dạng sau:
-                [
-                    {{
-                        "question": "Câu hỏi?",
-                        "options": ["A. Đáp án 1", "B. Đáp án 2", "C. Đáp án 3", "D. Đáp án 4"],
-                        "answer": "A. Đáp án 1",
-                        "level": "Dễ"
-                    }}
-                ]
-                Không được thêm bất kỳ văn bản chào hỏi hay giải thích nào bên ngoài mảng JSON.
-                """
+            elif file_ext == 'txt':
+                full_text = quiz_file.read().decode("utf-8")
+                parsed_q = parse_questions_from_text(full_text)
                 
-                response_text = ""
-
-                # Xử lý File PDF
-                if file_ext == 'pdf':
-                    reader = PdfReader(lesson_file)
-                    extracted_text = "".join([page.extract_text() or "" for page in reader.pages]).strip()
-                    
-                    if len(extracted_text) > 50:
-                        response_text = generate_content_stable([prompt, f"Nội dung bài học:\n{extracted_text}"])
-                    else:
-                        lesson_file.seek(0)
-                        pdf_bytes = lesson_file.read()
-                        pdf_part = {"mime_type": "application/pdf", "data": pdf_bytes}
-                        response_text = generate_content_stable([prompt, pdf_part])
-
-                # Xử lý File Word (.docx)
-                elif file_ext in ['docx', 'doc']:
-                    doc = docx.Document(lesson_file)
-                    doc_text = "\n".join([p.text for p in doc.paragraphs if p.text.strip()])
-                    response_text = generate_content_stable([prompt, f"Nội dung bài học:\n{doc_text}"])
-
-                # Xử lý File Ảnh
-                elif file_ext in ['jpg', 'jpeg', 'png']:
-                    img = Image.open(lesson_file)
-                    response_text = generate_content_stable([prompt, img])
-
-                # Parse JSON an toàn
-                st.session_state.quiz_data = parse_json_safely(response_text)
-                st.success(f"Đã tạo thành công {len(st.session_state.quiz_data)} câu hỏi!")
-
-            except Exception as e:
-                st.error(f"Chi tiết lỗi: {str(e)}")
+            elif file_ext == 'xlsx':
+                df_q = pd.read_excel(quiz_file)
+                # Giả định cấu hình cột: Câu hỏi | Lựa chọn A | Lựa chọn B | Lựa chọn C | Lựa chọn D
+                for _, row in df_q.iterrows():
+                    cols = row.dropna().tolist()
+                    if len(cols) >= 3:
+                        q_title = str(cols[0])
+                        opts = [str(c) for c in cols[1:]]
+                        parsed_q.append({
+                            "question": q_title,
+                            "options": opts,
+                            "answer": opts[0]
+                        })
+            
+            if parsed_q and not st.session_state.quiz_data:
+                st.session_state.quiz_data = parsed_q
+                st.success(f"Đã nạp {len(parsed_q)} câu hỏi!")
+        except Exception as e:
+            st.error(f"Lỗi đọc file câu hỏi: {str(e)}")
 
     st.markdown("---")
     st.subheader("📊 THỐNG KÊ LÀM BÀI")
-    st.metric("Số HS đã làm (Không tính trùng):", len(st.session_state.completed_students))
+    st.metric("Số HS đã nộp bài:", len(st.session_state.completed_students))
     if st.session_state.completed_students:
         st.write("Danh sách HS đã nộp:")
         for name in st.session_state.completed_students:
             st.write(f"- {name}")
 
 # ----------------------------------------------------
-# PHẦN 2: DÀNH CHO HỌC SINH LÀM BÀI
+# PHẦN 2: CHỈNH SỬA & DUYỆT ĐÁP ÁN ĐÚNG (GIÁO VIÊN)
+# ----------------------------------------------------
+if st.session_state.quiz_data:
+    with st.expander("📝 CẤU HÌNH & CHỌN ĐÁP ÁN ĐÚNG CHO BỘ CÂU HỎI", expanded=True):
+        st.info("Hãy chọn chính xác ĐÁP ÁN ĐÚNG cho từng câu hỏi bên dưới trước khi cho học sinh làm bài:")
+        
+        for idx, q in enumerate(st.session_state.quiz_data):
+            st.markdown(f"**Câu {idx+1}:** {q['question']}")
+            
+            # Chọn đáp án đúng cho câu hỏi
+            correct_ans = st.selectbox(
+                f"Chọn đáp án đúng cho Câu {idx+1}:",
+                options=q['options'],
+                index=q['options'].index(q['answer']) if q['answer'] in q['options'] else 0,
+                key=f"config_ans_{idx}"
+            )
+            # Cập nhật đáp án đúng vào session
+            st.session_state.quiz_data[idx]['answer'] = correct_ans
+            st.write("---")
+
+# ----------------------------------------------------
+# PHẦN 3: DÀNH CHO HỌC SINH LÀM BÀI
 # ----------------------------------------------------
 st.subheader("📝 Màn Hình Làm Bài Học Sinh")
 
 if not student_list:
-    st.info("👈 Giáo viên vui lòng mở thanh menu bên trái để tải danh sách lớp và tạo đề trước!")
+    st.info("👈 Giáo viên vui lòng mở thanh menu bên trái để tải danh sách lớp!")
 elif not st.session_state.quiz_data:
-    st.info("👈 Giáo viên vui lòng tải tài liệu (PDF, Word, Ảnh) và bấm 'AI Tạo Câu Hỏi'.")
+    st.info("👈 Giáo viên vui lòng tải file câu hỏi (Word, TXT, Excel) ở menu bên trái.")
 else:
     selected_student = st.selectbox("👉 Chọn Họ và Tên của bạn:", ["-- Chọn đúng tên bạn --"] + student_list)
     
@@ -184,8 +166,8 @@ else:
             user_answers = {}
             with st.form("quiz_form"):
                 for idx, q in enumerate(st.session_state.quiz_data):
-                    st.markdown(f"**Câu {idx+1} [{q.get('level', 'Trung bình')}]:** {q['question']}")
-                    user_answers[idx] = st.radio(f"Chọn đáp án:", q['options'], key=f"q_{idx}")
+                    st.markdown(f"**Câu {idx+1}:** {q['question']}")
+                    user_answers[idx] = st.radio(f"Chọn đáp án:", q['options'], key=f"student_q_{idx}")
                     st.write("---")
                 
                 submit_btn = st.form_submit_button("NỘP BÀI KIỂM TRA")
