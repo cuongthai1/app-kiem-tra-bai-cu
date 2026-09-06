@@ -7,7 +7,7 @@ import docx
 from pypdf import PdfReader
 
 # CẤU HÌNH API KEY (Thay bằng mã khóa Google của bạn)
-GEMINI_API_KEY = "AQ.Ab8RN6LAdAxqsS0oCV37oXpDBar1_zWEryngmzcomDPINt_tlw"
+GEMINI_API_KEY = "DÁN_MA_KHOA_GOOGLE_CUA_BAN_VAO_DAY"
 
 genai.configure(api_key=GEMINI_API_KEY)
 
@@ -19,28 +19,6 @@ if 'completed_students' not in st.session_state:
 
 if 'quiz_data' not in st.session_state:
     st.session_state.quiz_data = None
-
-# Hàm đọc nội dung từ File PDF, Word hoặc Ảnh
-def extract_content_from_file(uploaded_file):
-    file_type = uploaded_file.name.split('.')[-1].lower()
-    
-    if file_type == 'pdf':
-        reader = PdfReader(uploaded_file)
-        text = ""
-        for page in reader.pages:
-            text += page.extract_text() + "\n"
-        return "text", text
-        
-    elif file_type in ['docx', 'doc']:
-        doc = docx.Document(uploaded_file)
-        text = "\n".join([p.text for p in doc.paragraphs if p.text.strip()])
-        return "text", text
-        
-    elif file_type in ['jpg', 'jpeg', 'png']:
-        img = Image.open(uploaded_file)
-        return "image", img
-        
-    return None, None
 
 # ----------------------------------------------------
 # PHẦN 1: DÀNH CHO GIÁO VIÊN
@@ -88,13 +66,12 @@ with st.sidebar:
     if st.button("🚀 AI Tạo Câu Hỏi") and lesson_file:
         with st.spinner("AI đang đọc tài liệu và soạn câu hỏi lý thuyết..."):
             try:
-                c_type, content = extract_content_from_file(lesson_file)
-                
+                file_ext = lesson_file.name.split('.')[-1].lower()
                 prompt = f"""
-                Bạn là giáo viên. Đọc tài liệu bài học này và tạo ra đúng {num_questions} câu hỏi trắc nghiệm lý thuyết để kiểm tra bài cũ học sinh.
-                Yêu cầu:
+                Bạn là giáo viên. Hãy đọc tài liệu bài học được cung cấp và tạo ra đúng {num_questions} câu hỏi trắc nghiệm lý thuyết để kiểm tra bài cũ học sinh.
+                Yêu cầu bắt buộc:
                 1. Trộn lẫn các mức độ Dễ, Khá, Khó để học sinh nắm vững bài.
-                2. Trả về ĐÚNG định dạng JSON theo mẫu sau (không kèm văn bản ngoài hay markdown):
+                2. Trả về ĐÚNG cấu trúc danh sách JSON thuần túy (KHÔNG chứa bất kỳ đoạn văn bản phụ nào, KHÔNG dùng thẻ markdown codeblock):
                 [
                     {{
                         "question": "Nội dung câu hỏi?",
@@ -106,17 +83,45 @@ with st.sidebar:
                 """
                 
                 model = genai.GenerativeModel('gemini-1.5-flash')
-                
-                if c_type == "image":
-                    response = model.generate_content([prompt, content])
-                else:
-                    response = model.generate_content([prompt, f"Nội dung bài học:\n{content}"])
-                
-                clean_json = response.text.replace("```json", "").replace("```", "").strip()
+                response_text = ""
+
+                # Xử lý File PDF
+                if file_ext == 'pdf':
+                    # Đọc thử dạng text
+                    reader = PdfReader(lesson_file)
+                    extracted_text = "".join([page.extract_text() or "" for page in reader.pages]).strip()
+                    
+                    if len(extracted_text) > 50:
+                        # PDF chuẩn có text
+                        res = model.generate_content([prompt, f"Nội dung bài học:\n{extracted_text}"])
+                    else:
+                        # PDF dạng ảnh scan -> Gửi byte file trực tiếp cho Gemini AI xử lý
+                        lesson_file.seek(0)
+                        pdf_bytes = lesson_file.read()
+                        pdf_part = {"mime_type": "application/pdf", "data": pdf_bytes}
+                        res = model.generate_content([prompt, pdf_part])
+                    response_text = res.text
+
+                # Xử lý File Word (.docx)
+                elif file_ext in ['docx', 'doc']:
+                    doc = docx.Document(lesson_file)
+                    doc_text = "\n".join([p.text for p in doc.paragraphs if p.text.strip()])
+                    res = model.generate_content([prompt, f"Nội dung bài học:\n{doc_text}"])
+                    response_text = res.text
+
+                # Xử lý File Ảnh
+                elif file_ext in ['jpg', 'jpeg', 'png']:
+                    img = Image.open(lesson_file)
+                    res = model.generate_content([prompt, img])
+                    response_text = res.text
+
+                # Bóc tách JSON
+                clean_json = response_text.replace("```json", "").replace("```", "").strip()
                 st.session_state.quiz_data = json.loads(clean_json)
                 st.success("Tạo đề thành công!")
+
             except Exception as e:
-                st.error("Có lỗi xảy ra khi đọc file hoặc tạo câu hỏi. Hãy thử lại!")
+                st.error(f"Chi tiết lỗi: {str(e)}")
 
     st.markdown("---")
     st.subheader("📊 THỐNG KÊ LÀM BÀI")
