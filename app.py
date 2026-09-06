@@ -5,10 +5,11 @@ import re
 import docx
 import base64
 import zlib
+import xml.etree.ElementTree as ET
 
 st.set_page_config(page_title="Hệ Thống Kiểm Tra Bài Cũ", layout="centered")
 
-# Nhúng thư viện KaTeX hỗ trợ hiển thị công thức Lý / Toán
+# Nhúng thư viện KaTeX để hiển thị công thức Lý / Toán
 st.markdown(
     """
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/katex.min.css">
@@ -17,19 +18,58 @@ st.markdown(
 )
 
 # ----------------------------------------------------
+# HÀM BÓC TÁCH XML CÔNG THỨC TOÁN WORD (OMML)
+# ----------------------------------------------------
+def get_docx_text_with_math(docx_file):
+    """Đọc file Docx bao gồm cả các công thức tạo bằng Word Equation (OMML)."""
+    doc = docx.Document(docx_file)
+    full_text = []
+    
+    # Namespace của Microsoft Word XML
+    ns = {
+        'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main',
+        'm': 'http://schemas.openxmlformats.org/officeDocument/2006/math'
+    }
+
+    for p in doc.paragraphs:
+        p_xml = ET.fromstring(p._p.xml)
+        para_text = ""
+        
+        # Duyệt qua từng đoạn văn bản hoặc khối công thức toán
+        for child in p_xml:
+            tag = child.tag.split('}')[-1]
+            if tag == 'r': # Văn bản thường
+                texts = child.findall('.//w:t', ns)
+                for t in texts:
+                    if t.text:
+                        para_text += t.text
+            elif tag == 'oMath' or tag == 'oMathPara': # Công thức toán/lý
+                math_texts = child.findall('.//m:t', ns)
+                math_str = "".join([t.text for t in math_texts if t.text])
+                if math_str:
+                    para_text += f" {math_str} "
+            else:
+                # Tìm tất cả văn bản còn lại trong child
+                texts = child.findall('.//w:t', ns)
+                for t in texts:
+                    if t.text:
+                        para_text += t.text
+                        
+        if para_text.strip():
+            full_text.append(para_text.strip())
+            
+    return "\n".join(full_text)
+
+# ----------------------------------------------------
 # HÀM XỬ LÝ KÝ HIỆU TOÁN & VẬT LÝ
 # ----------------------------------------------------
 def format_math_text(text):
     if not isinstance(text, str):
         return str(text)
     
-    # Chuẩn hóa các biểu thức toán/lý cơ bản
+    # Chuẩn hóa các dấu đóng mở công thức
     text = re.sub(r'\\\((.*?)\\\)', r'$\1$', text)
     text = re.sub(r'\\\[(.*?)\\\]', r'$$\1$$', text)
-    
-    # Tự động nhận diện căn thức & phân số cơ bản nếu thiếu dấu $
-    text = re.sub(r'√\((.*?)\)', r'$\\sqrt{\1}$', text)
-    text = re.sub(r'√(\w+)', r'$\\sqrt{\1}$', text)
     
     return text
 
@@ -75,7 +115,7 @@ if url_data:
         st.session_state.quiz_data = url_data.get("quiz")
 
 # ----------------------------------------------------
-# HÀM BÓC TÁCH CÂU HỎI TỪ WORD/TXT THÔNG MINH
+# HÀM BÓC TÁCH CÂU HỎI TỪ VĂN BẢN
 # ----------------------------------------------------
 def parse_questions_from_text(text):
     questions = []
@@ -87,27 +127,25 @@ def parse_questions_from_text(text):
         if not block:
             continue
         
-        # Tách A., B., C., D. ngay cả khi chúng nằm ngang trên cùng 1 dòng
-        # Tìm vị trí bắt đầu của đáp án A.
+        # Tìm vị trí bắt đầu của các lựa chọn A., B., C., D.
         opt_match = re.search(r'(?=\b[A-D][\.\:\)])', block)
         
         if opt_match:
             q_text = block[:opt_match.start()].strip()
             opts_part = block[opt_match.start():].strip()
             
-            # Tách thành các đáp án A, B, C, D
+            # Tách các đáp án A, B, C, D nằm trên cùng 1 dòng hoặc nhiều dòng
             raw_options = re.split(r'\s*(?=\b[A-D][\.\:\)])', opts_part)
             options = [o.strip() for o in raw_options if o.strip()]
             
             if len(options) >= 2:
-                # Đảm bảo câu hỏi bắt đầu bằng "Câu X..."
                 q_lines = [l.strip() for l in q_text.split('\n') if l.strip()]
                 full_q = " ".join(q_lines)
                 
                 questions.append({
                     "question": full_q,
                     "options": options,
-                    "answer": options[0]  # Mặc định lấy đáp án A
+                    "answer": options[0]  # Mặc định lấy A làm đáp án mẫu
                 })
     return questions
 
@@ -224,8 +262,8 @@ else:
                 file_ext = quiz_file.name.split('.')[-1].lower()
                 try:
                     if file_ext == 'docx':
-                        doc = docx.Document(quiz_file)
-                        full_text = "\n".join([p.text for p in doc.paragraphs if p.text.strip()])
+                        # Gọi hàm đọc XML đặc biệt giải mã Word Equation
+                        full_text = get_docx_text_with_math(quiz_file)
                         parsed_q = parse_questions_from_text(full_text)
                     elif file_ext == 'txt':
                         full_text = quiz_file.read().decode("utf-8")
@@ -242,7 +280,9 @@ else:
                                 })
                     if parsed_q:
                         st.session_state.quiz_data = parsed_q
-                        st.success(f"✅ Đã nạp thành công {len(parsed_q)} câu hỏi!")
+                        st.success(f"✅ Đã nạp thành công {len(parsed_q)} câu hỏi từ file Word!")
+                    else:
+                        st.error("Không bóc tách được câu hỏi nào. Vui lòng kiểm tra lại định dạng 'Câu 1.', 'Câu 2.'...")
                 except Exception as e:
                     st.error(f"Lỗi đọc file câu hỏi: {str(e)}")
 
@@ -265,7 +305,6 @@ else:
                     st.session_state.quiz_data[idx]['answer'] = correct_ans
                     st.write("---")
 
-                # Mã hóa dữ liệu gói vào Link
                 payload = {
                     "users": st.session_state.users_db,
                     "quiz": st.session_state.quiz_data
