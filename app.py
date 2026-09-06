@@ -7,7 +7,7 @@ import docx
 from pypdf import PdfReader
 
 # CẤU HÌNH API KEY (Thay bằng mã khóa Google của bạn)
-GEMINI_API_KEY = "DÁN_MA_KHOA_GOOGLE_CUA_BAN_VAO_DAY"
+GEMINI_API_KEY = st.secrets.get("GEMINI_API_KEY", "")
 
 genai.configure(api_key=GEMINI_API_KEY)
 
