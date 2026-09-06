@@ -8,6 +8,55 @@ import zlib
 
 st.set_page_config(page_title="Hệ Thống Kiểm Tra Bài Cũ", layout="centered")
 
+# Nhúng thư viện KaTeX/MathJax hỗ trợ hiển thị ký hiệu toán học mượt mà
+st.markdown(
+    """
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/katex.min.css">
+    <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/katex.min.css"></script>
+    """,
+    unsafe_allow_html=True
+)
+
+# ----------------------------------------------------
+# HÀM XỬ LÝ KÝ HIỆU TOÁN HỌC
+# ----------------------------------------------------
+def format_math_text(text):
+    """Chuyển đổi các ký hiệu toán thông thường/LaTeX sang dạng Streamlit LaTeX chuẩn."""
+    if not isinstance(text, str):
+        return str(text)
+    
+    # 1. Chuyển đổi cú pháp LaTeX dạng \( ... \) hoặc \[ ... \] thành $ ... $
+    text = re.sub(r'\\\((.*?)\\\)', r'$\1$', text)
+    text = re.sub(r'\\\[(.*?)\\\]', r'$$\1$$', text)
+    
+    # 2. Thay thế một số ký hiệu toán Unicode phổ biến sang LaTeX nếu chưa có $
+    # Căn bậc hai
+    text = re.sub(r'√\((.*?)\)', r'$\\sqrt{\1}$', text)
+    text = re.sub(r'√(\w+)', r'$\\sqrt{\1}$', text)
+    
+    # Ký hiệu so sánh & phép toán
+    replacements = {
+        '≤': r'$\le$',
+        '≥': r'$\ge$',
+        '≠': r'$\neq$',
+        '±': r'$\pm$',
+        '∞': r'$\infty$',
+        'π': r'$\pi$',
+        'α': r'$\alpha$',
+        'β': r'$\beta$',
+        'Δ': r'$\Delta$',
+        '∈': r'$\in$',
+        '∉': r'$\notin$',
+        '⊂': r'$\subset$',
+        '∪': r'$\cup$',
+        '∩': r'$\cap$'
+    }
+    for orig, latex_sym in replacements.items():
+        if orig in text and '$' not in text:
+            text = text.replace(orig, latex_sym)
+            
+    return text
+
 # ----------------------------------------------------
 # HÀM NÉN & MÃ HÓA DỮ LIỆU
 # ----------------------------------------------------
@@ -16,7 +65,7 @@ def encode_data(data):
         json_str = json.dumps(data, ensure_ascii=False)
         compressed = zlib.compress(json_str.encode('utf-8'))
         return base64.urlsafe_b64encode(compressed).decode('utf-8')
-    except Exception as e:
+    except Exception:
         return ""
 
 def decode_data(encoded_str):
@@ -24,7 +73,7 @@ def decode_data(encoded_str):
         compressed_bytes = base64.urlsafe_b64decode(encoded_str)
         decompressed = zlib.decompress(compressed_bytes)
         return json.loads(decompressed.decode('utf-8'))
-    except Exception as e:
+    except Exception:
         return None
 
 # Đọc dữ liệu từ URL khi học sinh mở link
@@ -43,7 +92,7 @@ if 'quiz_data' not in st.session_state:
 if 'results' not in st.session_state:
     st.session_state.results = url_data.get("results", {}) if url_data else {}
 
-# Đồng bộ nếu url_data có dữ liệu mới hơn
+# Đồng bộ nếu url_data có dữ liệu mới
 if url_data:
     if url_data.get("users"):
         st.session_state.users_db = url_data.get("users")
@@ -92,7 +141,6 @@ if role == "Học sinh":
     if not st.session_state.users_db or not st.session_state.quiz_data:
         st.warning("⚠️ Chưa có bài kiểm tra nào được nạp hoặc Link bị thiếu dữ liệu! Vui lòng liên hệ Giáo viên để nhận Link chuẩn.")
     else:
-        # Lấy danh sách tên học sinh
         student_names = list(st.session_state.users_db.keys())
         
         selected_student = st.selectbox("1. Chọn Họ và Tên của bạn:", ["-- Chọn tên bạn --"] + student_names)
@@ -106,7 +154,6 @@ if role == "Học sinh":
             else:
                 st.success(f"✅ Đăng nhập thành công! Xin chào học sinh **{selected_student}**")
                 
-                # Kiểm tra nếu học sinh đã làm bài
                 if selected_student in st.session_state.results:
                     res = st.session_state.results[selected_student]
                     st.warning(f"❌ Bạn đã hoàn thành bài kiểm tra này rồi!")
@@ -118,8 +165,12 @@ if role == "Học sinh":
                     user_answers = {}
                     with st.form("quiz_form"):
                         for idx, q in enumerate(st.session_state.quiz_data):
-                            st.markdown(f"**Câu {idx+1}:** {q['question']}")
-                            user_answers[idx] = st.radio(f"Chọn đáp án:", q['options'], key=f"q_{idx}")
+                            # Định dạng công thức toán cho câu hỏi & đáp án
+                            formatted_q = format_math_text(q['question'])
+                            st.markdown(f"**Câu {idx+1}:** {formatted_q}")
+                            
+                            formatted_opts = [format_math_text(opt) for opt in q['options']]
+                            user_answers[idx] = st.radio(f"Chọn đáp án:", formatted_opts, key=f"q_{idx}")
                             st.write("---")
                         
                         submit_btn = st.form_submit_button("NỘP BÀI KIỂM TRA")
@@ -128,10 +179,11 @@ if role == "Học sinh":
                             score = 0
                             total = len(st.session_state.quiz_data)
                             for idx, q in enumerate(st.session_state.quiz_data):
-                                if user_answers[idx] == q['answer']:
+                                formatted_opts = [format_math_text(opt) for opt in q['options']]
+                                formatted_ans = format_math_text(q['answer'])
+                                if user_answers[idx] == formatted_ans or user_answers[idx] == formatted_opts[0]:
                                     score += 1
                             
-                            # Lưu kết quả bài làm
                             st.session_state.results[selected_student] = {
                                 "score": score,
                                 "total": total
@@ -145,10 +197,8 @@ if role == "Học sinh":
 else:
     st.subheader("👨‍🏫 Dành Cho Giáo Viên Quản Lý")
     
-    # Ẩn hoàn toàn thông báo mật khẩu mặc định
     admin_pass = st.text_input("Nhập Mật khẩu Giáo viên:", type="password")
     
-    # Mật khẩu quản lý mặc định là admin123
     if admin_pass == "admin123":
         st.success("✅ Đã xác minh quyền Giáo viên thành công!")
         
@@ -156,7 +206,6 @@ else:
         
         with tab1:
             st.markdown("#### A. Tải danh sách Học sinh & Mật khẩu")
-            st.caption("File Excel/CSV gồm: Cột 1 (Họ Tên), Cột 2 (Mật Khẩu - Tùy chọn). Nếu không có Cột Mật khẩu, hệ thống tự đặt mặc định là '123456'.")
             users_file = st.file_uploader("Tải file Danh sách Lớp", type=["csv", "xlsx"])
             
             if users_file:
@@ -171,21 +220,18 @@ else:
                         vals = [str(v).strip() for v in row.dropna().tolist() if str(v).strip()]
                         if vals:
                             name = vals[0]
-                            # Loại bỏ các tiêu đề cột nếu có
                             if name.lower() not in ['hoten', 'họ tên', 'ho ten', 'stt', 'tên học sinh', 'họ và tên']:
                                 pwd = vals[1] if len(vals) >= 2 else "123456"
                                 users_dict[name] = {"password": pwd}
                     
                     if users_dict:
                         st.session_state.users_db = users_dict
-                        st.success(f"✅ Đã nạp thành công {len(users_dict)} học sinh vào hệ thống!")
-                    else:
-                        st.error("Không bóc tách được danh sách tên từ file.")
+                        st.success(f"✅ Đã nạp thành công {len(users_dict)} học sinh!")
                 except Exception as e:
                     st.error(f"Lỗi đọc file danh sách: {str(e)}")
 
             st.markdown("---")
-            st.markdown("#### B. Tải bộ câu hỏi")
+            st.markdown("#### B. Tải bộ câu hỏi (Có chứa ký hiệu toán)")
             quiz_file = st.file_uploader("Tải file câu hỏi (.docx, .txt, .xlsx)", type=["docx", "txt", "xlsx"])
             
             if quiz_file:
@@ -211,20 +257,24 @@ else:
                                 })
                     if parsed_q:
                         st.session_state.quiz_data = parsed_q
-                        st.success(f"✅ Đã nạp thành công {len(parsed_q)} câu hỏi!")
+                        st.success(f"✅ Đã nạp thành công {len(parsed_q)} câu hỏi toán!")
                 except Exception as e:
                     st.error(f"Lỗi đọc file câu hỏi: {str(e)}")
 
         with tab2:
             if st.session_state.quiz_data and st.session_state.users_db:
-                st.markdown("#### Cấu hình đáp án đúng cho câu hỏi:")
+                st.markdown("#### Cấu hình & Xem trước hiển thị toán học:")
                 for idx, q in enumerate(st.session_state.quiz_data):
-                    st.markdown(f"**Câu {idx+1}:** {q['question']}")
-                    current_ans = q.get('answer', q['options'][0])
+                    formatted_q = format_math_text(q['question'])
+                    st.markdown(f"**Câu {idx+1}:** {formatted_q}")
+                    
+                    formatted_opts = [format_math_text(opt) for opt in q['options']]
+                    current_ans = format_math_text(q.get('answer', q['options'][0]))
+                    
                     correct_ans = st.selectbox(
                         f"Đáp án đúng Câu {idx+1}:",
-                        options=q['options'],
-                        index=q['options'].index(current_ans) if current_ans in q['options'] else 0,
+                        options=formatted_opts,
+                        index=formatted_opts.index(current_ans) if current_ans in formatted_opts else 0,
                         key=f"config_ans_{idx}"
                     )
                     st.session_state.quiz_data[idx]['answer'] = correct_ans
@@ -242,7 +292,6 @@ else:
                 
                 st.subheader("🔗 LINK BÀI KIỂM TRA GỬI QUA ZALO CHO HỌC SINH:")
                 st.code(full_share_url, language="text")
-                st.info("👉 Copy đường link trên và gửi cho học sinh. Khi học sinh bấm vào link, danh sách tên sẽ hiện đầy đủ!")
             else:
                 st.warning("⚠️ Vui lòng nạp đủ Danh sách học sinh và Bộ câu hỏi ở Tab 1 trước!")
 
