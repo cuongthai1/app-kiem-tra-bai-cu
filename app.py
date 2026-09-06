@@ -10,214 +10,372 @@ import xml.etree.ElementTree as ET
 
 st.set_page_config(page_title="Hệ Thống Kiểm Tra Bài Cũ", layout="centered")
 
-# --- NHÚNG KATEX ĐỂ HIỂN THỊ CÔNG THỨC TOÁN / LÝ ---
+# Nhúng thư viện KaTeX để hiển thị công thức Lý / Toán
 st.markdown(
     """
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/katex.min.css">
-    <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/katex.min.js"></script>
-    <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/contrib/auto-render.min.js"
-        onload="renderMathInElement(document.body);"></script>
     """,
     unsafe_allow_html=True
 )
 
-# --- XỬ LÝ CÔNG THỨC WORD (OMML TO LATEX) ---
-def omml_to_latex(element):
+# ----------------------------------------------------
+# HÀM BÓC TÁCH XML CÔNG THỨC TOÁN WORD (OMML)
+# ----------------------------------------------------
+def get_docx_text_with_math(docx_file):
+    doc = docx.Document(docx_file)
+    full_text = []
+    
+    ns = {
+        'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main',
+        'm': 'http://schemas.openxmlformats.org/officeDocument/2006/math'
+    }
+
+    for p in doc.paragraphs:
+        p_xml = ET.fromstring(p._p.xml)
+        para_text = ""
+        
+        for child in p_xml:
+            tag = child.tag.split('}')[-1]
+            if tag == 'r':
+                texts = child.findall('.//w:t', ns)
+                for t in texts:
+                    if t.text:
+                        para_text += t.text
+            elif tag == 'oMath' or tag == 'oMathPara':
+                math_texts = child.findall('.//m:t', ns)
+                math_str = "".join([t.text for t in math_texts if t.text])
+                if math_str:
+                    para_text += f" {math_str} "
+            else:
+                texts = child.findall('.//w:t', ns)
+                for t in texts:
+                    if t.text:
+                        para_text += t.text
+                        
+        if para_text.strip():
+            full_text.append(para_text.strip())
+            
+    return "\n".join(full_text)
+
+# ----------------------------------------------------
+# HÀM XỬ LÝ KÝ HIỆU TOÁN & VẬT LÝ & LỌC CHỮ "CÂU X"
+# ----------------------------------------------------
+def format_math_text(text):
+    if not isinstance(text, str):
+        return str(text)
+    
+    text = re.sub(r'\\\((.*?)\\\)', r'$\1$', text)
+    text = re.sub(r'\\\[(.*?)\\\]', r'$$\1$$', text)
+    
+    return text
+
+def clean_question_prefix(text):
+    """Xóa bỏ chữ 'Câu 1:', 'Câu 1.', 'Câu 6' ở đầu câu để tránh lặp khi trộn đề."""
+    if not isinstance(text, str):
+        return text
+    # Xóa các dạng "Câu 1:", "Câu 1.", "Câu 1 ", "Câu 10:"
+    cleaned = re.sub(r'^\s*Câu\s*\d+[\.\:\s]*', '', text, flags=re.IGNORECASE)
+    return cleaned.strip()
+
+# ----------------------------------------------------
+# HÀM NÉN & MÃ HÓA DỮ LIỆU
+# ----------------------------------------------------
+def encode_data(data):
     try:
-        tag = element.tag.split('}')[-1]
-        if tag == 't':
-            return element.text or ""
-        elif tag == 'f':
-            num, den = "", ""
-            for child in element:
-                c_tag = child.tag.split('}')[-1]
-                if c_tag == 'num':
-                    num = "".join([omml_to_latex(c) for c in child])
-                elif c_tag == 'den':
-                    den = "".join([omml_to_latex(c) for c in child])
-            return f"\\frac{{{num}}}{{{den}}}"
-        elif tag == 'sSup':
-            e, sup = "", ""
-            for child in element:
-                c_tag = child.tag.split('}')[-1]
-                if c_tag == 'e':
-                    e = "".join([omml_to_latex(c) for c in child])
-                elif c_tag == 'sup':
-                    sup = "".join([omml_to_latex(c) for c in child])
-            return f"{{{e}}}^{{{sup}}}"
-        elif tag == 'sSub':
-            e, sub = "", ""
-            for child in element:
-                c_tag = child.tag.split('}')[-1]
-                if c_tag == 'e':
-                    e = "".join([omml_to_latex(c) for c in child])
-                elif c_tag == 'sub':
-                    sub = "".join([omml_to_latex(c) for c in child])
-            return f"{{{e}}}_{{{sub}}}"
-        elif tag == 'rad':
-            e = "".join([omml_to_latex(c) for c in element if c.tag.endswith('e')])
-            return f"\\sqrt{{{e}}}"
-        else:
-            return "".join([omml_to_latex(child) for child in element])
+        json_str = json.dumps(data, ensure_ascii=False)
+        compressed = zlib.compress(json_str.encode('utf-8'))
+        return base64.urlsafe_b64encode(compressed).decode('utf-8')
     except Exception:
         return ""
 
-def read_docx_with_math(file):
-    doc = docx.Document(file)
-    text_list = []
-    for p in doc.paragraphs:
-        p_text = ""
-        for child in p._element:
-            tag = child.tag.split('}')[-1]
-            if tag == 'r':
-                for grand in child:
-                    if grand.tag.endswith('t'):
-                        p_text += grand.text or ""
-            elif tag == 'oMath':
-                latex = omml_to_latex(child)
-                if latex:
-                    p_text += f" ${latex}$ "
-        if p_text.strip():
-            text_list.append(p_text.strip())
-    return "\n".join(text_list)
+def decode_data(encoded_str):
+    try:
+        compressed_bytes = base64.urlsafe_b64decode(encoded_str)
+        decompressed = zlib.decompress(compressed_bytes)
+        return json.loads(decompressed.decode('utf-8'))
+    except Exception:
+        return None
 
-def clean_prefix(text):
-    text = re.sub(r'^(Câu|Câu hỏi)\s*\d+[:\.]?\s*', '', text, flags=re.IGNORECASE)
-    text = re.sub(r'^[A-D][:\.]\s*', '', text, flags=re.IGNORECASE)
-    return text.strip()
+# Đọc dữ liệu từ URL khi học sinh mở link
+query_params = st.query_params
+url_data = None
+if "data" in query_params:
+    url_data = decode_data(query_params["data"])
 
-def parse_docx_questions(text):
+# Khởi tạo Session State
+if 'users_db' not in st.session_state:
+    st.session_state.users_db = url_data.get("users", {}) if url_data else {}
+
+if 'quiz_data' not in st.session_state:
+    st.session_state.quiz_data = url_data.get("quiz", []) if url_data else []
+
+if 'results' not in st.session_state:
+    st.session_state.results = url_data.get("results", {}) if url_data else {}
+
+if url_data:
+    if url_data.get("users"):
+        st.session_state.users_db = url_data.get("users")
+    if url_data.get("quiz"):
+        st.session_state.quiz_data = url_data.get("quiz")
+
+# ----------------------------------------------------
+# HÀM BÓC TÁCH CÂU HỎI TỪ VĂN BẢN
+# ----------------------------------------------------
+def parse_questions_from_text(text):
     questions = []
-    lines = [l.strip() for l in text.split('\n') if l.strip()]
-    current_q = None
+    blocks = re.split(r'\n(?=Câu\s*\d+[\.\:\s])', text, flags=re.IGNORECASE)
     
-    for line in lines:
-        if re.match(r'^(Câu|Câu hỏi)\s*\d+', line, re.IGNORECASE):
-            if current_q and current_q['options']:
-                questions.append(current_q)
-            q_text = clean_prefix(line)
-            current_q = {"question": q_text, "options": [], "correct": None}
-        elif current_q and re.match(r'^[A-D][:\.]', line, re.IGNORECASE):
-            is_correct = '*' in line or 'TRUE' in line.upper()
-            opt_text = line.replace('*', '').strip()
-            opt_text = clean_prefix(opt_text)
-            current_q["options"].append(opt_text)
-            if is_correct:
-                current_q["correct"] = len(current_q["options"]) - 1
+    for block in blocks:
+        block = block.strip()
+        if not block:
+            continue
+        
+        opt_match = re.search(r'(?=\b[A-D][\.\:\)])', block)
+        
+        if opt_match:
+            q_text = block[:opt_match.start()].strip()
+            opts_part = block[opt_match.start():].strip()
+            
+            raw_options = re.split(r'\s*(?=\b[A-D][\.\:\)])', opts_part)
+            options = [o.strip() for o in raw_options if o.strip()]
+            
+            if len(options) >= 2:
+                q_lines = [l.strip() for l in q_text.split('\n') if l.strip()]
+                full_q = " ".join(q_lines)
                 
-    if current_q and current_q['options']:
-        questions.append(current_q)
+                # Tự động loại bỏ tiền tố "Câu X" thừa khi vừa bóc tách
+                clean_q = clean_question_prefix(full_q)
+                
+                questions.append({
+                    "question": clean_q,
+                    "options": options,
+                    "answer": options[0]
+                })
     return questions
 
-# --- LƯU ĐIỂM VỀ GOOGLE SHEETS ---
-def save_to_google_sheets(student_name, student_class, score, total):
-    try:
-        import gspread
-        from google.oauth2.service_account import Credentials
-        
-        scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-        creds_dict = st.secrets["gcp_service_account"]
-        creds = Credentials.from_service_account_info(creds_dict, scopes=scope)
-        client = gspread.authorize(creds)
-        
-        sheet = client.open("diem_kiem_tra").worksheet("KetQua")
-        sheet.append_row([student_name, student_class, f"{score}/{total}", round(score/total*10, 2)])
-        return True
-    except Exception:
-        return False
+# ----------------------------------------------------
+# MÀN HÌNH CHÍNH
+# ----------------------------------------------------
+st.title("🔐 HỆ THỐNG KIỂM TRA BÀI CŨ")
 
-# --- GIAO DIỆN CHÍNH ---
-st.title("🔒 HỆ THỐNG KIỂM TRA BÀI CŨ")
+role = st.radio("👉 Chọn vai trò của bạn:", ["Học sinh", "Giáo viên"], horizontal=True)
 
-# Khởi tạo bộ nhớ chung cho bài kiểm tra
-if "active_quiz" not in st.session_state:
-    st.session_state.active_quiz = None
-
-role = st.sidebar.radio("Chọn vai trò:", ["Học sinh", "Giáo viên"])
-
-if role == "Giáo viên":
-    st.subheader("👨‍🏫 Dành Cho Giáo Viên - Nạp Đề Thi")
-    uploaded_file = st.file_uploader("Tải file đề thi Word (.docx)", type=["docx"])
-    
-    if uploaded_file:
-        raw_text = read_docx_with_math(uploaded_file)
-        parsed_q = parse_docx_questions(raw_text)
-        if parsed_q:
-            st.session_state.active_quiz = parsed_q
-            st.success(f"✅ Nạp thành công {len(parsed_q)} câu hỏi vào hệ thống!")
-            st.info("Bây giờ bạn chỉ cần copy link web dán qua Zalo, tất cả Học sinh bấm vào link đều sẽ mở được đề này ngay lập tức.")
-        else:
-            st.error("Không tìm thấy câu hỏi đúng định dạng trong file Word!")
-
-else:
+# ----------------------------------------------------
+# PHẦN 1: GIAO DIỆN HỌC SINH
+# ----------------------------------------------------
+if role == "Học sinh":
     st.subheader("👨‍🎓 Dành Cho Học Sinh Làm Bài")
     
-    # Kiểm tra xem đã có đề thi nạp vào hệ thống chưa
-    if not st.session_state.active_quiz:
-        st.warning("⚠️ Hiện tại chưa có bài kiểm tra nào được nạp! Vui lòng liên hệ Giáo viên.")
+    if not st.session_state.users_db or not st.session_state.quiz_data:
+        st.warning("⚠️ Chưa có bài kiểm tra nào được nạp hoặc Link bị thiếu dữ liệu! Vui lòng liên hệ Giáo viên để nhận Link chuẩn.")
     else:
-        questions = st.session_state.active_quiz
+        student_names = list(st.session_state.users_db.keys())
         
-        # Khởi tạo đề xáo trộn riêng cho từng học sinh
-        if "student_quiz" not in st.session_state:
-            shuffled_q = []
-            for q in questions:
-                opts = list(enumerate(q["options"]))
-                random.shuffle(opts)
-                new_opts = [opt[1] for opt in opts]
-                new_correct = [i for i, opt in enumerate(opts) if opt[0] == q["correct"]]
-                shuffled_q.append({
-                    "question": q["question"],
-                    "options": new_opts,
-                    "correct": new_correct[0] if new_correct else 0
-                })
-            random.shuffle(shuffled_q)
-            st.session_state.student_quiz = shuffled_q
-
-        quiz = st.session_state.student_quiz
+        selected_student = st.selectbox("1. Chọn Họ và Tên của bạn:", ["-- Chọn tên bạn --"] + student_names)
+        input_pass = st.text_input("2. Nhập Mật khẩu của bạn:", type="password")
         
-        with st.form("quiz_form"):
-            col1, col2 = st.columns(2)
-            with col1:
-                name = st.text_input("Họ và tên học sinh:")
-            with col2:
-                student_class = st.text_input("Lớp:")
+        if selected_student != "-- Chọn tên bạn --" and input_pass:
+            correct_pass = str(st.session_state.users_db[selected_student]['password']).strip()
+            
+            if input_pass.strip() != correct_pass:
+                st.error("❌ Mật khẩu không chính xác! Vui lòng kiểm tra lại.")
+            else:
+                st.success(f"✅ Đăng nhập thành công! Xin chào học sinh **{selected_student}**")
                 
-            st.divider()
-            
-            user_answers = {}
-            labels = ["A", "B", "C", "D"]
-            
-            for idx, q in enumerate(quiz):
-                st.markdown(f"**Câu {idx + 1}:** {q['question']}")
-                formatted_opts = [f"{labels[i]}. {opt}" for i, opt in enumerate(q["options"])]
-                ans = st.radio(f"Chọn đáp án câu {idx + 1}:", formatted_opts, index=None, key=f"q_{idx}", label_visibility="collapsed")
-                user_answers[idx] = ans
-                st.markdown("---")
-                
-            submitted = st.form_submit_button("NỘP BÀI KIỂM TRA", use_container_width=True)
-            
-            if submitted:
-                if not name.strip() or not student_class.strip():
-                    st.error("❌ Vui lòng nhập đầy đủ Họ tên và Lớp trước khi nộp bài!")
+                if selected_student in st.session_state.results:
+                    res = st.session_state.results[selected_student]
+                    st.warning(f"❌ Bạn đã hoàn thành bài kiểm tra này rồi!")
+                    st.info(f"📊 Kết quả bài làm: **{res['score']}/{res['total']} câu đúng**")
                 else:
-                    score = 0
-                    for idx, q in enumerate(quiz):
-                        if user_answers[idx] is not None:
-                            selected_label = user_answers[idx].split(".")[0]
-                            selected_idx = labels.index(selected_label)
-                            if selected_idx == q["correct"]:
-                                score += 1
+                    # XÁO TRỘN ĐỀ THI RIÊNG TỪNG HỌC SINH
+                    shuffled_key = f"shuffled_quiz_{selected_student}"
+                    if shuffled_key not in st.session_state:
+                        user_quiz = [q.copy() for q in st.session_state.quiz_data]
+                        
+                        # Đảo ngẫu nhiên các đáp án A, B, C, D
+                        for q in user_quiz:
+                            opts = q['options'].copy()
+                            random.shuffle(opts)
+                            q['options'] = opts
+                            
+                        # Đảo ngẫu nhiên thứ tự các câu hỏi
+                        random.shuffle(user_quiz)
+                        st.session_state[shuffled_key] = user_quiz
+                    
+                    student_quiz = st.session_state[shuffled_key]
+
+                    st.markdown("---")
+                    st.markdown("### 📝 BÀI KIỂM TRA (Đề đã được tạo ngẫu nhiên)")
+                    
+                    user_answers = {}
+                    with st.form("quiz_form"):
+                        for idx, q in enumerate(student_quiz):
+                            # Làm sạch tiền tố câu hỏi & định dạng toán
+                            clean_q_text = clean_question_prefix(q['question'])
+                            formatted_q = format_math_text(clean_q_text)
+                            
+                            # Hiển thị thứ tự câu chuẩn duy nhất 1 lần
+                            st.markdown(f"**Câu {idx + 1}:** {formatted_q}")
+                            
+                            formatted_opts = [format_math_text(opt) for opt in q['options']]
+                            
+                            user_answers[idx] = st.radio(
+                                f"Chọn đáp án:", 
+                                formatted_opts, 
+                                index=None, 
+                                key=f"q_{selected_student}_{idx}"
+                            )
+                            st.write("---")
+                        
+                        submit_btn = st.form_submit_button("NỘP BÀI KIỂM TRA")
+                        
+                        if submit_btn:
+                            unanswered = [i + 1 for i, ans in user_answers.items() if ans is None]
+                            
+                            if unanswered:
+                                st.error(f"⚠️ Bạn chưa chọn đáp án cho các câu: {', '.join(map(str, unanswered))}. Vui lòng hoàn thành tất cả các câu trước khi nộp!")
+                            else:
+                                score = 0
+                                total = len(student_quiz)
                                 
-                    total = len(quiz)
-                    final_grade = round(score / total * 10, 2)
-                    
-                    st.balloons()
-                    st.success(f"🎉 Kết quả của {name} - Lớp {student_class}: {score}/{total} câu đúng ({final_grade} điểm)")
-                    
-                    # Tự động gửi kết quả về Google Sheets
-                    sheet_saved = save_to_google_sheets(name, student_class, score, total)
-                    if sheet_saved:
-                        st.info("✅ Kết quả làm bài đã được tự động lưu vào hệ thống điểm của Giáo viên.")
+                                for idx, q in enumerate(student_quiz):
+                                    formatted_ans = format_math_text(q['answer'])
+                                    if user_answers[idx] == formatted_ans:
+                                        score += 1
+                                
+                                st.session_state.results[selected_student] = {
+                                    "score": score,
+                                    "total": total
+                                }
+                                st.balloons()
+                                st.success(f"🎉 Bạn đã nộp bài thành công! Kết quả: {score}/{total} câu đúng.")
+
+# ----------------------------------------------------
+# PHẦN 2: GIAO DIỆN GIÁO VIÊN
+# ----------------------------------------------------
+else:
+    st.subheader("👨‍🏫 Dành Cho Giáo Viên Quản Lý")
+    
+    admin_pass = st.text_input("Nhập Mật khẩu Giáo viên:", type="password")
+    
+    if admin_pass == "admin123":
+        st.success("✅ Đã xác minh quyền Giáo viên thành công!")
+        
+        tab1, tab2, tab3 = st.tabs(["1. Tải Dữ Liệu", "2. Duyệt Đáp Án & Tạo Link Zalo", "3. Báo Cáo Kết Quả"])
+        
+        with tab1:
+            st.markdown("#### A. Tải danh sách Học sinh & Mật khẩu")
+            users_file = st.file_uploader("Tải file Danh sách Lớp", type=["csv", "xlsx"])
+            
+            if users_file:
+                try:
+                    if users_file.name.endswith('.csv'):
+                        df = pd.read_csv(users_file, header=None)
                     else:
-                        st.warning("⚠️ Bài làm đã chấm điểm xong (không thể kết nối Google Sheets).")
+                        df = pd.read_excel(users_file, header=None)
+                    
+                    users_dict = {}
+                    for _, row in df.iterrows():
+                        vals = [str(v).strip() for v in row.dropna().tolist() if str(v).strip()]
+                        if vals:
+                            name = vals[0]
+                            if name.lower() not in ['hoten', 'họ tên', 'ho ten', 'stt', 'tên học sinh', 'họ và tên']:
+                                pwd = vals[1] if len(vals) >= 2 else "123456"
+                                users_dict[name] = {"password": pwd}
+                    
+                    if users_dict:
+                        st.session_state.users_db = users_dict
+                        st.success(f"✅ Đã nạp thành công {len(users_dict)} học sinh!")
+                except Exception as e:
+                    st.error(f"Lỗi đọc file danh sách: {str(e)}")
+
+            st.markdown("---")
+            st.markdown("#### B. Tải bộ câu hỏi (.docx, .txt, .xlsx)")
+            quiz_file = st.file_uploader("Tải file câu hỏi", type=["docx", "txt", "xlsx"])
+            
+            if quiz_file:
+                parsed_q = []
+                file_ext = quiz_file.name.split('.')[-1].lower()
+                try:
+                    if file_ext == 'docx':
+                        full_text = get_docx_text_with_math(quiz_file)
+                        parsed_q = parse_questions_from_text(full_text)
+                    elif file_ext == 'txt':
+                        full_text = quiz_file.read().decode("utf-8")
+                        parsed_q = parse_questions_from_text(full_text)
+                    elif file_ext == 'xlsx':
+                        df_q = pd.read_excel(quiz_file)
+                        for _, row in df_q.iterrows():
+                            cols = row.dropna().tolist()
+                            if len(cols) >= 3:
+                                parsed_q.append({
+                                    "question": clean_question_prefix(str(cols[0])),
+                                    "options": [str(c) for c in cols[1:]],
+                                    "answer": str(cols[1])
+                                })
+                    if parsed_q:
+                        st.session_state.quiz_data = parsed_q
+                        st.success(f"✅ Đã nạp thành công {len(parsed_q)} câu hỏi từ file Word!")
+                    else:
+                        st.error("Không bóc tách được câu hỏi nào. Vui lòng kiểm tra lại định dạng 'Câu 1.', 'Câu 2.'...")
+                except Exception as e:
+                    st.error(f"Lỗi đọc file câu hỏi: {str(e)}")
+
+        with tab2:
+            if st.session_state.quiz_data and st.session_state.users_db:
+                st.markdown("#### Cấu hình & Xem trước bộ câu hỏi GỐC:")
+                for idx, q in enumerate(st.session_state.quiz_data):
+                    clean_q_text = clean_question_prefix(q['question'])
+                    formatted_q = format_math_text(clean_q_text)
+                    
+                    st.markdown(f"**Câu {idx+1}:** {formatted_q}")
+                    
+                    formatted_opts = [format_math_text(opt) for opt in q['options']]
+                    current_ans = format_math_text(q.get('answer', q['options'][0]))
+                    
+                    correct_ans = st.selectbox(
+                        f"Đáp án đúng cho Câu {idx+1}:",
+                        options=formatted_opts,
+                        index=formatted_opts.index(current_ans) if current_ans in formatted_opts else 0,
+                        key=f"config_ans_{idx}"
+                    )
+                    st.session_state.quiz_data[idx]['answer'] = correct_ans
+                    st.write("---")
+
+                payload = {
+                    "users": st.session_state.users_db,
+                    "quiz": st.session_state.quiz_data
+                }
+                encoded_str = encode_data(payload)
+                
+                app_url = st.context.headers.get("Host", "")
+                full_share_url = f"https://{app_url}/?data={encoded_str}" if app_url else f"?data={encoded_str}"
+                
+                st.subheader("🔗 LINK BÀI KIỂM TRA GỬI QUA ZALO CHO HỌC SINH:")
+                st.code(full_share_url, language="text")
+            else:
+                st.warning("⚠️ Vui lòng nạp đủ Danh sách học sinh và Bộ câu hỏi ở Tab 1 trước!")
+
+        with tab3:
+            st.markdown("#### 📊 THỐNG KÊ KẾT QUẢ BÀI LÀM")
+            if not st.session_state.results:
+                st.info("Chưa có học sinh nào nộp bài trong phiên này.")
+            else:
+                total_students = len(st.session_state.users_db)
+                done_count = len(st.session_state.results)
+                
+                st.metric("Số học sinh đã làm bài:", f"{done_count}/{total_students}")
+                
+                res_data = []
+                for student, data in st.session_state.results.items():
+                    res_data.append({
+                        "Họ và Tên Học Sinh": student,
+                        "Kết quả làm bài": f"{data['score']}/{data['total']} câu đúng"
+                    })
+                
+                df_res = pd.DataFrame(res_data)
+                df_res.index = range(1, len(df_res) + 1)
+                
+                st.dataframe(df_res, use_container_width=True)
+    elif admin_pass:
+        st.error("❌ Mật khẩu Giáo viên không chính xác!")
